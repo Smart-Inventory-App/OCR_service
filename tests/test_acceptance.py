@@ -7,9 +7,14 @@ Verifican los dos criterios de aceptación:
 
 El conjunto de validación de este prototipo son documentos sintéticos con su
 ground truth: el motor se sustituye por un doble cuya confianza y cuyas líneas
-reproducen escenarios realistas (lectura nítida, borrosa, inclinada). Al
-incorporar el dataset real de `bench/dataset/`, `run_benchmark.py` mide lo mismo
-contra las imágenes de verdad.
+reproducen escenarios realistas. Es un *gate* de regresión sobre la extracción y
+el scoring, no una medición de precisión de los motores — eso lo mide
+`run_benchmark.py` sobre las fotos reales de `bench/sample_res_product/` y
+`bench/sample_res_product_expiredate/`, y sus resultados están en el README.
+
+Los tres tipos de documento se cubren por separado, que es justamente el cambio
+que introdujo la división del escaneo: la etiqueta aporta nombre, marca y
+detalles; el sello aporta la fecha.
 """
 
 from datetime import date
@@ -29,47 +34,51 @@ TODAY = date(2026, 7, 29)
 
 LABEL_CASES = [
     (
-        ["Leche La Serenisima 1L", "VTO 15/08/2027", "LOTE A2291"],
-        [44, 22, 18],
+        ["La Serenisima", "LECHE ENTERA", "1 litro"],
+        [60, 30, 16],
         0.97,
-        {"nombre_producto": "Leche La Serenisima 1L", "fecha_vencimiento": "2027-08-15"},
+        {"nombre_producto": "LECHE ENTERA", "marca": "La Serenisima"},
     ),
     (
-        ["Industria Argentina", "Yogur Firme Frutilla", "CONS. PREF. 01/12/2026"],
-        [16, 46, 18],
+        ["Yogurisimo", "YOGUR FIRME FRUTILLA", "190 g"],
+        [60, 28, 14],
         0.95,
-        {"nombre_producto": "Yogur Firme Frutilla", "fecha_vencimiento": "2026-12-01"},
+        {"nombre_producto": "YOGUR FIRME FRUTILLA", "marca": "Yogurisimo"},
     ),
     (
-        ["Arroz Largo Fino 1kg", "VENCE 20/03/2028"],
-        [42, 20],
+        ["Gallo", "ARROZ LARGO FINO", "1 kg"],
+        [60, 28, 14],
         0.93,
-        {"nombre_producto": "Arroz Largo Fino 1kg", "fecha_vencimiento": "2028-03-20"},
+        {"nombre_producto": "ARROZ LARGO FINO", "marca": "Gallo"},
     ),
     (
-        ["Aceite de Girasol 900ml", "VTO 30/09/2027"],
-        [40, 20],
+        ["Natura", "ACEITE DE GIRASOL", "900 ml"],
+        [60, 28, 14],
         0.96,
-        {"nombre_producto": "Aceite de Girasol 900ml", "fecha_vencimiento": "2027-09-30"},
+        {"nombre_producto": "ACEITE DE GIRASOL", "marca": "Natura"},
     ),
     (
-        ["Fideos Tirabuzon 500g", "VTO 02/2028", "SIN TACC"],
-        [40, 20, 16],
+        ["Matarazzo", "FIDEOS TIRABUZON", "500 g"],
+        [60, 28, 14],
         0.94,
-        {"nombre_producto": "Fideos Tirabuzon 500g", "fecha_vencimiento": "2028-02-29"},
+        {"nombre_producto": "FIDEOS TIRABUZON", "marca": "Matarazzo"},
     ),
     (
-        ["Dulce de Leche 400g", "VTO 15-ago-27"],
-        [40, 20],
-        0.92,
-        {"nombre_producto": "Dulce de Leche 400g", "fecha_vencimiento": "2027-08-15"},
-    ),
-    (
-        ["Cafe Molido 250g", "Consumir preferentemente antes de 10/11/2027"],
-        [40, 18],
+        ["La Virginia", "CAFE MOLIDO", "250 g"],
+        [60, 28, 14],
         0.95,
-        {"nombre_producto": "Cafe Molido 250g", "fecha_vencimiento": "2027-11-10"},
+        {"nombre_producto": "CAFE MOLIDO", "marca": "La Virginia"},
     ),
+]
+
+# Sellos de vencimiento: los formatos que aparecen impresos sobre el envase.
+EXPIRY_CASES = [
+    (["VTO 15/08/2027"], 0.96, "2027-08-15"),
+    (["CONS. PREF. 01/12/2026"], 0.95, "2026-12-01"),
+    (["VENCE 20/03/2028"], 0.94, "2028-03-20"),
+    (["Consumir preferentemente antes de 10/11/2027"], 0.95, "2027-11-10"),
+    (["VTO 15-ago-27"], 0.93, "2027-08-15"),
+    (["VTO.: 05/01/27 ENV.: 05/01/26"], 0.95, "2027-01-05"),
 ]
 
 RECEIPT_CASES = [
@@ -129,6 +138,12 @@ def _label_result(case):
     return ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
 
 
+def _expiry_result(case):
+    lines, confidence, _ = case
+    output = make_output(lines, confidence=confidence)
+    return ocr_service.build_result(output, output.text, DocType.EXPIRY_DATE, TODAY)
+
+
 def _receipt_result(case):
     lines, confidence, _ = case
     output = make_output(lines, confidence=confidence)
@@ -150,6 +165,10 @@ def test_key_field_accuracy_meets_85_percent():
         for name, value in expected.items():
             total += 1
             correct += result.fields[name].value == value
+
+    for case in EXPIRY_CASES:
+        total += 1
+        correct += _expiry_result(case).fields["fecha_vencimiento"].value == case[2]
 
     for case in RECEIPT_CASES:
         result = _receipt_result(case)
@@ -180,6 +199,13 @@ def test_label_document_confidence_meets_threshold(case):
     assert result.document_confidence >= settings.DOCUMENT_CONFIDENCE_THRESHOLD
 
 
+@pytest.mark.parametrize("case", EXPIRY_CASES, ids=lambda c: c[0][0][:24])
+def test_expiry_document_confidence_meets_threshold(case):
+    result = _expiry_result(case)
+
+    assert result.document_confidence >= settings.DOCUMENT_CONFIDENCE_THRESHOLD
+
+
 @pytest.mark.parametrize("case", RECEIPT_CASES, ids=lambda c: c[0][0][:24])
 def test_receipt_document_confidence_meets_threshold(case):
     result = _receipt_result(case)
@@ -190,6 +216,7 @@ def test_receipt_document_confidence_meets_threshold(case):
 def test_clean_documents_do_not_require_manual_review():
     """Con lectura nítida y campos completos, no debe pedirse corrección manual."""
     flagged = [case[3]["nombre_producto"] for case in LABEL_CASES if _label_result(case).needs_review]
+    flagged += [case[2] for case in EXPIRY_CASES if _expiry_result(case).needs_review]
 
     assert flagged == []
 
@@ -208,9 +235,18 @@ def test_blurry_documents_are_flagged_for_review():
         assert result.document_confidence < settings.DOCUMENT_CONFIDENCE_THRESHOLD
 
 
-def test_illegible_document_is_flagged_for_review():
+def test_illegible_label_is_flagged_for_review():
     output = make_output(["####", "??"], confidence=0.20, heights=[20, 20])
     result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
+
+    assert result.needs_review is True
+    assert result.fields["nombre_producto"].value is None
+
+
+def test_unreadable_stamp_is_flagged_for_review():
+    """Sin fecha legible el servicio no inventa un valor: lo deja en None."""
+    output = make_output(["L: 2601 B 09:15"], confidence=0.90)
+    result = ocr_service.build_result(output, output.text, DocType.EXPIRY_DATE, TODAY)
 
     assert result.needs_review is True
     assert result.fields["fecha_vencimiento"].value is None

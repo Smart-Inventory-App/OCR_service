@@ -63,6 +63,22 @@ def test_without_keyword_prefers_future_date():
     assert parsed.iso == "2028-01-10"
 
 
+def test_implausible_expiry_year_is_rejected():
+    """El ruido leído como dígitos produce fechas absurdas: mejor None que un dato falso."""
+    assert dates.find_expiry_date("VTO 31/03/4006", TODAY) is None
+    assert dates.find_expiry_date("VTO 01/01/2010", TODAY) is None  # demasiado vieja
+
+
+def test_plausible_expiry_window_is_accepted():
+    assert dates.find_expiry_date("VTO 01/01/2035", TODAY) is not None
+    assert dates.find_expiry_date("VTO 01/01/2025", TODAY) is not None  # vencida reciente
+
+
+def test_future_purchase_date_is_rejected():
+    """Un ticket no puede ser del futuro: es una lectura errónea."""
+    assert dates.find_purchase_date("FECHA 20/07/2030", TODAY) is None
+
+
 def test_invalid_dates_are_ignored():
     assert dates.find_expiry_date("VTO 32/13/2027", TODAY) is None
     assert dates.find_expiry_date("sin fecha alguna", TODAY) is None

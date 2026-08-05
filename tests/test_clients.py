@@ -71,16 +71,16 @@ async def test_from_url_rejects_oversized_image(monkeypatch):
             await image_loader.from_url(IMAGE_URL)
 
 
-def test_decode_returns_bgr_matrix():
-    image = image_loader.decode(render_image([("LECHE", 40)]))
+def test_validate_returns_the_image_size():
+    """Se valida sin decodificar la imagen entera: alcanza con la cabecera."""
+    width, height = image_loader.validate(render_image([("LECHE", 40)], size=(640, 480)))
 
-    assert image.ndim == 3
-    assert image.shape[2] == 3
+    assert (width, height) == (640, 480)
 
 
-def test_decode_rejects_non_image_bytes():
+def test_validate_rejects_non_image_bytes():
     with pytest.raises(image_loader.ImageLoadError, match="no es una imagen"):
-        image_loader.decode(b"esto no es una imagen")
+        image_loader.validate(b"esto no es una imagen")
 
 
 def test_fingerprint_is_stable_and_content_dependent():

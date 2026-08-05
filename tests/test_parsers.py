@@ -2,8 +2,10 @@
 
 from datetime import date
 
+import pytest
+
 from app.core.config import settings
-from app.parsers import product_label, receipt, scoring
+from app.parsers import expiry, product_label, receipt, scoring
 from app.schemas.ocr import DocType, ExtractedField
 from app.services import ocr_service
 from tests.conftest import make_output
@@ -12,31 +14,61 @@ TODAY = date(2026, 7, 29)
 
 
 # ---------------------------------------------------------------------------
-# Caso A — etiqueta de producto
+# Caso A — etiqueta de producto: nombre, marca y detalles
 # ---------------------------------------------------------------------------
 
-def test_label_extracts_name_and_expiry():
+def test_label_extracts_name_brand_and_details():
     output = make_output(
-        ["Leche La Serenisima 1L", "VTO 15/08/2027", "LOTE A2291"],
-        heights=[44, 22, 18],
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], heights=[60, 30, 18]
     )
 
     fields = product_label.parse(output, output.text, TODAY)
 
-    assert fields["nombre_producto"].value == "Leche La Serenisima 1L"
-    assert fields["fecha_vencimiento"].value == "2027-08-15"
+    assert fields["nombre_producto"].value == "LECHE ENTERA"
+    assert fields["marca"].value == "La Serenisima"
+    assert "1 litro" in fields["detalles"].value
 
 
-def test_label_name_uses_largest_typography():
-    """El nombre es la línea de tipografía más grande, no la primera."""
-    output = make_output(
-        ["Industria Argentina", "Yogur Firme Frutilla", "Peso neto 190g"],
-        heights=[16, 48, 16],
-    )
+def test_label_name_is_the_category_not_the_biggest_line():
+    """La tipografía más grande de un envase es la marca, no el producto.
+
+    Es la regresión de la heurística anterior: `PUREZA` está impreso mucho más
+    grande que `HARINA`, y el nombre del producto es `HARINA`.
+    """
+    output = make_output(["HARINA", "PUREZA", "1 kg"], heights=[34, 80, 16])
 
     fields = product_label.parse(output, output.text, TODAY)
 
-    assert fields["nombre_producto"].value == "Yogur Firme Frutilla"
+    assert fields["nombre_producto"].value == "HARINA"
+    assert fields["marca"].value == "PUREZA"
+
+
+def test_label_merges_a_name_split_across_lines():
+    """`Leche` y `Entera` en dos renglones son un solo nombre."""
+    output = make_output(["Leche", "Entera", "1 litro"], heights=[40, 40, 16])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Leche Entera"
+
+
+def test_label_recovers_a_split_first_letter():
+    """El motor parte la versalita inicial: `C AFÉ` sigue siendo la categoría."""
+    output = make_output(["LaVirginia", "C AFE INSTANTANEO", "en sobres"], heights=[70, 34, 18])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "C AFE INSTANTANEO"
+    assert fields["marca"].value == "LaVirginia"
+
+
+def test_label_does_not_extract_expiry_date():
+    """El vencimiento tiene su propio tipo de documento y su propia foto."""
+    output = make_output(["LECHE ENTERA", "VTO 15/08/2027"], heights=[40, 20])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert "fecha_vencimiento" not in fields
 
 
 def test_label_ignores_noise_lines_as_name():
@@ -47,34 +79,51 @@ def test_label_ignores_noise_lines_as_name():
     assert fields["nombre_producto"].value == "Arroz Largo Fino"
 
 
-def test_label_without_date_reports_zero_confidence():
-    output = make_output(["Fideos Tirabuzon"], heights=[40])
-
-    fields = product_label.parse(output, output.text, TODAY)
-
-    assert fields["fecha_vencimiento"].value is None
-    assert fields["fecha_vencimiento"].confidence == 0.0
-
-
-def test_label_past_expiry_is_penalized():
-    """Una fecha ya vencida suele ser la de elaboración: baja la confianza."""
-    past = make_output(["Leche Entera 1L", "VTO 01/01/2020"], heights=[40, 20])
-    future = make_output(["Leche Entera 1L", "VTO 01/01/2028"], heights=[40, 20])
-
-    past_conf = product_label.parse(past, past.text, TODAY)["fecha_vencimiento"].confidence
-    future_conf = product_label.parse(future, future.text, TODAY)["fecha_vencimiento"].confidence
-
-    assert past_conf < future_conf
-
-
 def test_label_low_engine_confidence_propagates_to_fields():
-    clear = make_output(["Leche Entera 1L", "VTO 01/01/2028"], confidence=0.98, heights=[40, 20])
-    blurry = make_output(["Leche Entera 1L", "VTO 01/01/2028"], confidence=0.42, heights=[40, 20])
+    clear = make_output(["Marca Uno", "Leche Entera"], confidence=0.98, heights=[50, 30])
+    blurry = make_output(["Marca Uno", "Leche Entera"], confidence=0.55, heights=[50, 30])
 
     clear_fields = product_label.parse(clear, clear.text, TODAY)
     blurry_fields = product_label.parse(blurry, blurry.text, TODAY)
 
     assert blurry_fields["nombre_producto"].confidence < clear_fields["nombre_producto"].confidence
+
+
+@pytest.mark.parametrize("garbage", ["( E Y e L", "AR es", "*/ -- ~~", "1 2 3 4 5"])
+def test_label_rejects_ocr_garbage_as_name(garbage):
+    """Ruido de una lectura fallida no debe ofrecerse como nombre de producto."""
+    output = make_output([garbage], heights=[40])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value is None
+
+
+def test_label_rejects_a_name_read_with_low_confidence():
+    """Un valor sin sentido es peor que un campo vacío: vacío pide revisión."""
+    output = make_output(["AU RARA"], confidence=0.2, heights=[40])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value is None
+
+
+def test_label_brand_must_be_typographically_prominent():
+    """La letra chica legal nunca es la marca, aunque sea lo único que quedó."""
+    output = make_output(["Leche Entera", "do Nero"], confidence=0.9, heights=[60, 14])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Leche Entera"
+    assert fields["marca"].value is None
+
+
+def test_label_accepts_real_name_over_garbage():
+    output = make_output(["( E Y e L", "Leche Entera"], heights=[50, 30])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Leche Entera"
 
 
 def test_label_empty_output_returns_empty_fields():
@@ -83,7 +132,74 @@ def test_label_empty_output_returns_empty_fields():
     fields = product_label.parse(output, output.text, TODAY)
 
     assert fields["nombre_producto"].value is None
+    assert fields["marca"].value is None
+    assert fields["detalles"].value is None
+
+
+# ---------------------------------------------------------------------------
+# Caso B — sello de fecha de vencimiento
+# ---------------------------------------------------------------------------
+
+def test_expiry_extracts_the_announced_date():
+    output = make_output(["CONSUMIR PREFERENTEMENTE ANTES DE:", "24/10/2027"])
+
+    fields = expiry.parse(output, output.text, TODAY)
+
+    assert fields["fecha_vencimiento"].value == "2027-10-24"
+
+
+def test_expiry_ignores_the_production_date():
+    """`ENV.: 05/01/26  VTO.: 05/01/27` — la de envasado no es el vencimiento."""
+    output = make_output(["ENV.: 05/01/26", "VTO.: 05/01/27", "L:2601 B 09:15"])
+
+    fields = expiry.parse(output, output.text, TODAY)
+
+    assert fields["fecha_vencimiento"].value == "2027-01-05"
+
+
+def test_expiry_without_a_date_reports_zero_confidence():
+    output = make_output(["LOTE A2291", "B 09:15"])
+
+    fields = expiry.parse(output, output.text, TODAY)
+
     assert fields["fecha_vencimiento"].value is None
+    assert fields["fecha_vencimiento"].confidence == 0.0
+
+
+def test_expiry_past_date_is_penalized():
+    """Una fecha ya vencida suele ser la de elaboración: baja la confianza."""
+    past = make_output(["VTO 01/01/2025"])
+    future = make_output(["VTO 01/01/2028"])
+
+    past_conf = expiry.parse(past, past.text, TODAY)["fecha_vencimiento"].confidence
+    future_conf = expiry.parse(future, future.text, TODAY)["fecha_vencimiento"].confidence
+
+    assert past_conf < future_conf
+
+
+def test_expiry_without_keyword_is_less_confident():
+    keyed = make_output(["VTO 15/08/2027"])
+    loose = make_output(["15/08/2027"])
+
+    keyed_conf = expiry.parse(keyed, keyed.text, TODAY)["fecha_vencimiento"].confidence
+    loose_conf = expiry.parse(loose, loose.text, TODAY)["fecha_vencimiento"].confidence
+
+    assert loose_conf < keyed_conf
+
+
+def test_expiry_repaired_month_is_less_confident():
+    """`24 GCT 27` se recupera, pero es una lectura reparada y se nota."""
+    clean = make_output(["VTO 24 OCT 2027"])
+    repaired = make_output(["VTO 24 GCT 2027"])
+
+    clean_fields = expiry.parse(clean, clean.text, TODAY)
+    repaired_fields = expiry.parse(repaired, repaired.text, TODAY)
+
+    assert repaired_fields["fecha_vencimiento"].value == "2027-10-24"
+    assert (
+        repaired_fields["fecha_vencimiento"].confidence
+        < clean_fields["fecha_vencimiento"].confidence
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -251,13 +367,16 @@ def test_document_confidence_of_empty_fields_is_zero():
     assert scoring.document_confidence({}) == 0.0
 
 
+KEY_FIELDS_BOTH = ("nombre_producto", "fecha_vencimiento")
+
+
 def test_needs_review_when_a_key_field_is_below_threshold():
     fields = {
         "nombre_producto": ExtractedField(value="Leche", confidence=0.99),
         "fecha_vencimiento": ExtractedField(value="2027-01-01", confidence=0.60),
     }
 
-    assert scoring.needs_review(fields, product_label.KEY_FIELDS) is True
+    assert scoring.needs_review(fields, KEY_FIELDS_BOTH) is True
 
 
 def test_no_review_needed_when_all_key_fields_are_confident():
@@ -266,13 +385,13 @@ def test_no_review_needed_when_all_key_fields_are_confident():
         "fecha_vencimiento": ExtractedField(value="2027-01-01", confidence=0.90),
     }
 
-    assert scoring.needs_review(fields, product_label.KEY_FIELDS) is False
+    assert scoring.needs_review(fields, KEY_FIELDS_BOTH) is False
 
 
 def test_missing_key_field_forces_review():
     fields = {"nombre_producto": ExtractedField(value="Leche", confidence=0.99)}
 
-    assert scoring.needs_review(fields, product_label.KEY_FIELDS) is True
+    assert scoring.needs_review(fields, KEY_FIELDS_BOTH) is True
 
 
 def test_thresholds_match_the_proposal():
@@ -286,7 +405,7 @@ def test_thresholds_match_the_proposal():
 
 def test_build_result_for_clean_label_does_not_need_review():
     output = make_output(
-        ["Leche La Serenisima 1L", "VTO 15/08/2027"], confidence=0.99, heights=[44, 20]
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], confidence=0.99, heights=[60, 30, 16]
     )
 
     result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
@@ -298,7 +417,7 @@ def test_build_result_for_clean_label_does_not_need_review():
 
 def test_build_result_for_blurry_label_needs_review():
     output = make_output(
-        ["Leche La Serenisima 1L", "VTO 15/08/2027"], confidence=0.45, heights=[44, 20]
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], confidence=0.45, heights=[60, 30, 16]
     )
 
     result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
@@ -339,8 +458,27 @@ def test_receipt_with_inferred_quantities_needs_review():
 
 
 def test_build_result_keeps_raw_text_for_audit():
-    output = make_output(["Leche Entera 1L", "VTO 15/08/2027"], heights=[40, 20])
+    output = make_output(["Leche Entera", "1 litro"], heights=[40, 20])
 
     result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
 
-    assert "Leche Entera 1L" in result.raw_text
+    assert "Leche Entera" in result.raw_text
+
+
+def test_build_result_for_expiry_scores_only_the_date():
+    output = make_output(["VTO: 15/08/2027"], confidence=0.99)
+
+    result = ocr_service.build_result(output, output.text, DocType.EXPIRY_DATE, TODAY)
+
+    assert set(result.fields) == {"fecha_vencimiento"}
+    assert result.fields["fecha_vencimiento"].value == "2027-08-15"
+    assert result.needs_review is False
+
+
+def test_build_result_for_unreadable_stamp_needs_review():
+    output = make_output(["LOTE A2291", "B 09:15"], confidence=0.99)
+
+    result = ocr_service.build_result(output, output.text, DocType.EXPIRY_DATE, TODAY)
+
+    assert result.fields["fecha_vencimiento"].value is None
+    assert result.needs_review is True

@@ -1,21 +1,27 @@
-"""Interfaz de motores, factory y modo híbrido.
+"""Cliente de los servicios de motor, factory y modo híbrido.
 
-El binario de Tesseract se mockea: la CI no depende de que esté instalado.
+Los servicios de motor no se levantan: se doblan sus respuestas HTTP con
+`respx`. Lo que se verifica acá es el contrato que este servicio habla con
+ellos, no que Tesseract sepa leer — eso es responsabilidad de su repositorio.
 """
 
-from unittest.mock import patch
+import json
 
-import numpy as np
+import httpx
 import pytest
+import respx
 
+from app.core.config import settings
 from app.engines import factory
 from app.engines.base import OCREngine, OCRWord, RawOCROutput
-from app.engines.easyocr_engine import EasyOCREngine
 from app.engines.factory import HybridEngine
-from app.engines.tesseract_engine import TesseractEngine
+from app.engines.remote import EngineUnavailable, RemoteEngine
+from app.pipeline.transform import Transform
 from tests.conftest import FakeEngine, make_output
 
-IMAGE = np.zeros((40, 120), dtype=np.uint8)
+IMAGE = b"\xff\xd8\xff\xe0 binario de una imagen"
+
+TESSERACT_URL = "http://engine-tesseract:8005"
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +29,28 @@ def clear_engine_cache():
     factory.reset_cache()
     yield
     factory.reset_cache()
+
+
+def engine_response(words: list[dict], engine: str = "tesseract") -> dict:
+    return {
+        "engine": engine,
+        "text": " ".join(word["text"] for word in words),
+        "words": words,
+        "elapsed_ms": 120,
+        "image_width": 1600,
+        "image_height": 900,
+        "lang": "spa",
+    }
+
+
+WORD = {
+    "text": "LECHE", "confidence": 0.93,
+    "left": 10, "top": 10, "width": 90, "height": 30, "line_num": 0,
+}
+
+
+def remote() -> RemoteEngine:
+    return RemoteEngine("tesseract", TESSERACT_URL, supports_preprocessing=True)
 
 
 # ---------------------------------------------------------------------------
@@ -45,224 +73,256 @@ def test_mean_confidence_without_words_is_zero():
     assert RawOCROutput(text="").mean_confidence == 0.0
 
 
-def test_lines_groups_and_orders_words():
-    output = make_output(["hola mundo", "segunda linea"])
+def test_lines_groups_words_and_preserves_reading_order():
+    output = make_output(["Leche Entera", "VTO 15/08/2027"])
 
-    assert [len(line) for line in output.lines()] == [2, 2]
-    assert output.text == "hola mundo\nsegunda linea"
-
-
-def test_from_words_derives_text_in_reading_order():
-    words = [
-        OCRWord("mundo", 0.9, 60, 0, 40, 20, line_num=0),
-        OCRWord("hola", 0.9, 10, 0, 40, 20, line_num=0),
-        OCRWord("chau", 0.9, 10, 40, 40, 20, line_num=1),
+    assert [" ".join(w.text for w in line) for line in output.lines()] == [
+        "Leche Entera",
+        "VTO 15/08/2027",
     ]
 
-    output = RawOCROutput.from_words(words, "test")
 
-    assert output.text == "hola mundo\nchau"
-    assert output.engine == "test"
+# ---------------------------------------------------------------------------
+# RemoteEngine
+# ---------------------------------------------------------------------------
+
+@respx.mock
+def test_remote_engine_sends_the_transform_as_json():
+    """La transformación viaja junto al binario: es lo que decide el coordinador."""
+    route = respx.post(f"{TESSERACT_URL}/engine/run").mock(
+        return_value=httpx.Response(200, json=engine_response([WORD]))
+    )
+
+    remote().run(IMAGE, lang="spa", layout="sparse", transform=Transform(rotate=90, binarize="adaptive"))
+
+    body = route.calls.last.request.content.decode("latin-1")
+    assert "sparse" in body
+
+    sent = json.loads(body.split('name="transform"')[1].split("\r\n\r\n")[1].split("\r\n")[0])
+    assert sent["rotate"] == 90
+    assert sent["binarize"] == "adaptive"
 
 
-def test_fake_engine_satisfies_the_protocol():
-    assert isinstance(FakeEngine(["x"]), OCREngine)
+@respx.mock
+def test_remote_engine_maps_words_and_confidence():
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(
+        return_value=httpx.Response(200, json=engine_response([WORD]))
+    )
+
+    output = remote().run(IMAGE)
+
+    assert output.engine == "tesseract"
+    assert output.words[0].text == "LECHE"
+    assert output.words[0].confidence == pytest.approx(0.93)
+    assert output.elapsed_ms == 120
 
 
-def test_real_engines_satisfy_the_protocol():
-    assert isinstance(TesseractEngine(), OCREngine)
-    assert isinstance(EasyOCREngine(), OCREngine)
+@respx.mock
+def test_remote_engine_rebuilds_text_when_the_service_omits_it():
+    body = engine_response([WORD])
+    body["text"] = ""
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(return_value=httpx.Response(200, json=body))
+
+    assert remote().run(IMAGE).text == "LECHE"
+
+
+@respx.mock
+def test_remote_engine_raises_when_the_service_errors():
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(
+        return_value=httpx.Response(500, json={"detail": "el motor falló"})
+    )
+
+    with pytest.raises(EngineUnavailable, match="500"):
+        remote().run(IMAGE)
+
+
+@respx.mock
+def test_remote_engine_raises_when_the_service_is_down():
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(side_effect=httpx.ConnectError("refused"))
+
+    with pytest.raises(EngineUnavailable, match="No se pudo contactar"):
+        remote().run(IMAGE)
+
+
+@respx.mock
+def test_remote_engine_is_available_only_when_ready():
+    respx.get(f"{TESSERACT_URL}/engine/readyz").mock(
+        return_value=httpx.Response(200, json={"status": "ok", "engine": "tesseract"})
+    )
+
+    assert remote().is_available()
+
+
+@respx.mock
+def test_remote_engine_degraded_still_counts_as_available():
+    """Sin el paquete de idioma el motor cae a inglés: sirve, con aviso."""
+    respx.get(f"{TESSERACT_URL}/engine/readyz").mock(
+        return_value=httpx.Response(
+            200, json={"status": "degraded", "engine": "tesseract", "detail": "falta spa"}
+        )
+    )
+
+    assert remote().is_available()
+
+
+@respx.mock
+def test_remote_engine_unavailable_when_the_engine_reports_error():
+    respx.get(f"{TESSERACT_URL}/engine/readyz").mock(
+        return_value=httpx.Response(200, json={"status": "error", "engine": "tesseract"})
+    )
+
+    assert not remote().is_available()
+
+
+@respx.mock
+def test_remote_engine_unavailable_when_unreachable():
+    respx.get(f"{TESSERACT_URL}/engine/readyz").mock(side_effect=httpx.ConnectError("refused"))
+
+    assert not remote().is_available()
+
+
+@respx.mock
+def test_remote_engine_takes_its_capabilities_from_the_service():
+    """Quién sabe si le sirve el preprocesamiento es el motor, no el coordinador."""
+    respx.get(f"{TESSERACT_URL}/engine/info").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "engine": "tesseract", "version": "5.5.0",
+                "languages": ["spa"], "supports_preprocessing": False,
+            },
+        )
+    )
+
+    engine = remote()
+    engine.refresh_capabilities()
+
+    assert engine.supports_preprocessing is False
+
+
+@respx.mock
+def test_remote_engine_info_is_cached():
+    route = respx.get(f"{TESSERACT_URL}/engine/info").mock(
+        return_value=httpx.Response(200, json={"engine": "tesseract", "version": "5.5.0"})
+    )
+
+    engine = remote()
+    engine.info()
+    engine.info()
+
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_remote_engine_survives_an_unreadable_info():
+    respx.get(f"{TESSERACT_URL}/engine/info").mock(side_effect=httpx.ConnectError("refused"))
+
+    assert remote().info()["version"] == "desconocida"
+
+
+@respx.mock
+def test_remote_engine_sends_the_shared_key(monkeypatch):
+    monkeypatch.setattr(settings, "ENGINE_API_KEY", "s3cr3t")
+    route = respx.post(f"{TESSERACT_URL}/engine/run").mock(
+        return_value=httpx.Response(200, json=engine_response([WORD]))
+    )
+
+    remote().run(IMAGE)
+
+    assert route.calls.last.request.headers["X-Engine-Key"] == "s3cr3t"
 
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
-def test_factory_returns_tesseract_by_default():
-    assert factory.build_engine().name == "tesseract"
+def test_factory_builds_each_concrete_engine_from_its_service_url():
+    assert factory.build_engine("tesseract").base_url == settings.TESSERACT_SERVICE_URL.rstrip("/")
+    assert factory.build_engine("easyocr").base_url == settings.EASYOCR_SERVICE_URL.rstrip("/")
 
 
-def test_factory_selects_engine_by_name():
-    assert factory.build_engine("easyocr").name == "easyocr"
+def test_factory_declares_who_benefits_from_preprocessing():
+    assert factory.build_engine("tesseract").supports_preprocessing is True
+    assert factory.build_engine("easyocr").supports_preprocessing is False
 
 
-def test_factory_is_case_insensitive():
-    assert factory.build_engine("TESSERACT").name == "tesseract"
-
-
-def test_factory_memoizes_instances():
+def test_factory_memoizes_engines():
     assert factory.build_engine("tesseract") is factory.build_engine("tesseract")
 
 
-def test_factory_rejects_unknown_engine():
+def test_factory_rejects_an_unknown_engine():
     with pytest.raises(ValueError, match="desconocido"):
-        factory.build_engine("no-existe")
+        factory.build_engine("paddleocr")
 
 
-def test_factory_builds_hybrid(monkeypatch):
-    from app.core.config import settings
+def test_factory_builds_the_hybrid_from_the_two_concrete_engines():
+    hybrid = factory.build_engine("hybrid")
 
-    monkeypatch.setattr(settings, "HYBRID_FALLBACK_ENGINE", "easyocr")
-
-    engine = factory.build_engine("hybrid")
-
-    assert isinstance(engine, HybridEngine)
-    assert engine.name == "hybrid(tesseract+easyocr)"
+    assert isinstance(hybrid, HybridEngine)
+    assert hybrid.primary.name == "tesseract"
+    assert hybrid.fallback.name == "easyocr"
 
 
-def test_hybrid_rejects_recursive_fallback(monkeypatch):
-    from app.core.config import settings
-
-    monkeypatch.setattr(settings, "HYBRID_FALLBACK_ENGINE", "hybrid")
-
-    with pytest.raises(ValueError, match="motor concreto"):
-        factory.build_engine("hybrid")
+def test_engines_satisfy_the_protocol():
+    assert isinstance(factory.build_engine("tesseract"), OCREngine)
+    assert isinstance(factory.build_engine("hybrid"), OCREngine)
 
 
 # ---------------------------------------------------------------------------
 # Modo híbrido
 # ---------------------------------------------------------------------------
 
-def test_hybrid_keeps_primary_when_confidence_is_high():
-    primary = FakeEngine(["texto nitido"], confidence=0.95)
-    fallback = FakeEngine(["otro texto"], confidence=0.99)
+class DeadEngine:
+    """Servicio de motor caído."""
 
-    result = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
+    name = "respaldo"
+    supports_preprocessing = False
 
-    assert result.engine == "fake"
-    assert fallback.calls == []  # el respaldo no se invocó
+    def is_available(self) -> bool:
+        return False
 
-
-def test_hybrid_retries_with_fallback_when_confidence_is_low():
-    primary = FakeEngine(["borroso"], confidence=0.30)
-    fallback = FakeEngine(["nitido"], confidence=0.90)
-
-    result = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
-
-    assert len(fallback.calls) == 1
-    assert result.mean_confidence == pytest.approx(0.90)
+    def run(self, *_args, **_kwargs):
+        raise EngineUnavailable("el servicio no responde")
 
 
-def test_hybrid_keeps_primary_if_fallback_is_worse():
-    primary = FakeEngine(["algo"], confidence=0.60)
-    fallback = FakeEngine(["peor"], confidence=0.10)
+def test_hybrid_keeps_the_primary_when_it_reads_well():
+    primary = FakeEngine(["Leche Entera"], confidence=0.95)
+    fallback = FakeEngine(["Leche Entera"], confidence=0.99)
 
-    result = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
+    output = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
 
-    assert result.mean_confidence == pytest.approx(0.60)
-
-
-def test_hybrid_survives_unavailable_fallback():
-    primary = FakeEngine(["borroso"], confidence=0.30)
-
-    class Unavailable(FakeEngine):
-        def is_available(self) -> bool:
-            return False
-
-    fallback = Unavailable(["nunca"], confidence=0.99)
-    result = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
-
+    assert output.engine == primary.name
     assert fallback.calls == []
-    assert result.mean_confidence == pytest.approx(0.30)
 
 
-def test_hybrid_propagates_layout_hint():
-    primary = FakeEngine(["x"], confidence=0.95)
+def test_hybrid_falls_back_when_the_primary_reads_poorly():
+    primary = FakeEngine(["ruido"], confidence=0.20, name="primario")
+    fallback = FakeEngine(["Leche Entera"], confidence=0.95, name="respaldo")
 
-    HybridEngine(primary, FakeEngine(["y"]), threshold=0.70).run(IMAGE, "spa", "sparse")
+    output = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
 
-    assert primary.calls[0]["layout"] == "sparse"
-
-
-# ---------------------------------------------------------------------------
-# Motor Tesseract (con pytesseract mockeado)
-# ---------------------------------------------------------------------------
-
-_TESSERACT_DATA = {
-    "text": ["Leche", "Entera", "", "VTO"],
-    "conf": [96, 92, -1, 88],
-    "left": [10, 80, 0, 10],
-    "top": [10, 10, 0, 60],
-    "width": [60, 70, 0, 40],
-    "height": [30, 30, 0, 20],
-    "block_num": [1, 1, 1, 1],
-    "par_num": [0, 0, 0, 0],
-    "line_num": [0, 0, 0, 1],
-}
+    assert output.engine == "respaldo"
+    assert len(fallback.calls) == 1
 
 
-def test_tesseract_maps_data_to_words():
-    with patch("pytesseract.image_to_data", return_value=_TESSERACT_DATA), \
-         patch("pytesseract.get_languages", return_value=["spa", "eng"]):
-        output = TesseractEngine().run(IMAGE, lang="spa")
+def test_hybrid_keeps_the_primary_if_the_fallback_reads_worse():
+    primary = FakeEngine(["Leche"], confidence=0.60, name="primario")
+    fallback = FakeEngine(["Leche"], confidence=0.30, name="respaldo")
 
-    assert output.engine == "tesseract"
-    assert output.text == "Leche Entera\nVTO"
-    # Las cajas sin texto reconocido (conf = -1) se descartan.
-    assert len(output.words) == 3
-    assert output.words[0].confidence == pytest.approx(0.96)
+    output = HybridEngine(primary, fallback, threshold=0.70).run(IMAGE)
+
+    assert output.engine == "primario"
 
 
-def test_tesseract_maps_layout_to_psm():
-    with patch("pytesseract.image_to_data", return_value=_TESSERACT_DATA) as mock, \
-         patch("pytesseract.get_languages", return_value=["spa"]):
-        TesseractEngine().run(IMAGE, lang="spa", layout="sparse")
+def test_hybrid_survives_a_fallback_that_is_down():
+    """Sin respaldo el híbrido degrada a su motor principal, no falla."""
+    primary = FakeEngine(["Leche"], confidence=0.40, name="primario")
 
-    assert mock.call_args.kwargs["config"] == "--psm 11"
+    output = HybridEngine(primary, DeadEngine(), threshold=0.70).run(IMAGE)
 
-
-def test_tesseract_falls_back_to_english_when_spanish_is_missing():
-    with patch("pytesseract.image_to_data", return_value=_TESSERACT_DATA) as mock, \
-         patch("pytesseract.get_languages", return_value=["eng"]):
-        TesseractEngine().run(IMAGE, lang="spa")
-
-    assert mock.call_args.kwargs["lang"] == "eng"
+    assert output.engine == "primario"
 
 
-def test_tesseract_availability_reflects_the_binary():
-    with patch("pytesseract.get_tesseract_version", return_value="5.3.0"):
-        assert TesseractEngine().is_available() is True
-
-    with patch("pytesseract.get_tesseract_version", side_effect=OSError("not found")):
-        assert TesseractEngine().is_available() is False
-
-
-def test_tesseract_line_ids_are_unique_across_blocks():
-    data = {**_TESSERACT_DATA, "block_num": [1, 2, 1, 1], "line_num": [0, 0, 0, 0]}
-
-    with patch("pytesseract.image_to_data", return_value=data), \
-         patch("pytesseract.get_languages", return_value=["spa"]):
-        output = TesseractEngine().run(IMAGE)
-
-    # Palabras en bloques distintos no se mezclan en la misma línea.
-    assert len(output.lines()) == 2
-
-
-# ---------------------------------------------------------------------------
-# Motor EasyOCR (opcional: no se instala en el MVP)
-# ---------------------------------------------------------------------------
-
-def test_easyocr_availability_depends_on_the_package():
-    engine = EasyOCREngine()
-
-    # En el deploy del MVP la dependencia no está: debe reportarlo, no explotar.
-    assert engine.is_available() in (True, False)
-
-
-def test_easyocr_converts_detections_to_words():
-    engine = EasyOCREngine()
-    detections = [
-        ([[10, 10], [70, 10], [70, 40], [10, 40]], "Leche", 0.95),
-        ([[80, 12], [150, 12], [150, 40], [80, 40]], "Entera", 0.91),
-        ([[10, 80], [50, 80], [50, 105], [10, 105]], "VTO", 0.88),
-    ]
-
-    class Reader:
-        def readtext(self, _image):
-            return detections
-
-    engine._reader = Reader()
-    output = engine.run(IMAGE)
-
-    assert output.engine == "easyocr"
-    assert output.text == "Leche Entera\nVTO"
+def test_hybrid_availability_depends_on_the_primary():
+    assert HybridEngine(FakeEngine(["x"]), DeadEngine(), 0.7).is_available() is True
+    assert HybridEngine(DeadEngine(), FakeEngine(["x"]), 0.7).is_available() is False

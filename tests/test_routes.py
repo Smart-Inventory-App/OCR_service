@@ -9,12 +9,15 @@ from app.main import app
 from app.schemas.ocr import DocType, JobStatus
 from tests.conftest import render_image
 
-LABEL_LINES = ["Leche La Serenisima 1L", "VTO 15/08/2027"]
+# Una etiqueta leída bien: marca en grande, nombre debajo, contenido chico.
+LABEL_LINES = ["La Serenisima", "LECHE ENTERA", "1 litro"]
+LABEL_HEIGHTS = [60, 30, 16]
+STAMP_LINES = ["VTO: 15/08/2027"]
 IMAGE_URL = "https://res.cloudinary.com/demo/image/upload/bazaar/ocr-temp/scan.jpg"
 
 
 def _image_bytes() -> bytes:
-    return render_image([("LECHE ENTERA 1L", 40), ("VTO 15/08/2027", 20)])
+    return render_image([("LA SERENISIMA", 40), ("LECHE ENTERA", 30), ("1 litro", 20)])
 
 
 def _files(content_type: str = "image/jpeg"):
@@ -152,7 +155,7 @@ async def test_full_async_flow(client, fake_redis, fake_engine):
     from app.services import queue
     from app.worker import process_job
 
-    fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     created = await client.post(
         "/ocr/jobs", json={"image_url": IMAGE_URL, "doc_type": "product_label"}
@@ -168,8 +171,8 @@ async def test_full_async_flow(client, fake_redis, fake_engine):
     body = (await client.get(f"/ocr/jobs/{job_id}")).json()
 
     assert body["status"] == JobStatus.DONE.value
-    assert body["result"]["fields"]["nombre_producto"]["value"] == "Leche La Serenisima 1L"
-    assert body["result"]["fields"]["fecha_vencimiento"]["value"] == "2027-08-15"
+    assert body["result"]["fields"]["nombre_producto"]["value"] == "LECHE ENTERA"
+    assert body["result"]["fields"]["marca"]["value"] == "La Serenisima"
     assert body["result"]["needs_review"] is False
 
 
@@ -247,7 +250,7 @@ async def test_scan_discards_temp_image_after_processing(client, fake_redis, fak
     from app.services import queue
     from app.worker import process_job
 
-    fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     with patch("app.services.storage_client.upload_temp", AsyncMock(return_value=IMAGE_URL)):
         await client.post("/ocr/scan", files=_files())
@@ -321,7 +324,7 @@ async def test_scan_rejects_empty_file(client, fake_redis):
 # ---------------------------------------------------------------------------
 
 async def test_sync_upload_returns_result_directly(client, fake_redis, fake_engine):
-    fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     r = await client.post(
         "/ocr/sync/upload", files=_files(), data={"doc_type": "product_label"}
@@ -329,14 +332,14 @@ async def test_sync_upload_returns_result_directly(client, fake_redis, fake_engi
 
     assert r.status_code == 200
     result = r.json()["result"]
-    assert result["fields"]["nombre_producto"]["value"] == "Leche La Serenisima 1L"
+    assert result["fields"]["nombre_producto"]["value"] == "LECHE ENTERA"
     assert result["engine"] == "fake"
     assert result["processing_ms"] >= 0
 
 
 async def test_sync_upload_works_without_redis(no_redis, client, fake_engine):
     """La caché es opcional: sin Redis el pipeline sincrónico sigue funcionando."""
-    fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     r = await client.post("/ocr/sync/upload", files=_files())
 
@@ -344,13 +347,13 @@ async def test_sync_upload_works_without_redis(no_redis, client, fake_engine):
 
 
 async def test_sync_from_url_downloads_and_processes(client, fake_redis, fake_engine):
-    fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     with patch("app.services.image_loader.from_url", AsyncMock(return_value=_image_bytes())):
         r = await client.post("/ocr/sync", json={"image_url": IMAGE_URL})
 
     assert r.status_code == 200
-    assert r.json()["result"]["fields"]["fecha_vencimiento"]["value"] == "2027-08-15"
+    assert r.json()["result"]["fields"]["nombre_producto"]["value"] == "LECHE ENTERA"
 
 
 async def test_sync_from_url_reports_download_failure_as_400(client, fake_redis):
@@ -366,7 +369,7 @@ async def test_sync_from_url_reports_download_failure_as_400(client, fake_redis)
 
 
 async def test_sync_discards_temp_image_when_requested(client, fake_redis, fake_engine):
-    fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     with patch("app.services.image_loader.from_url", AsyncMock(return_value=_image_bytes())), \
          patch("app.services.storage_client.discard_temp", AsyncMock(return_value=True)) as discard:
@@ -390,11 +393,62 @@ async def test_sync_rejects_corrupt_image(client, fake_redis, fake_engine):
 
 
 # ---------------------------------------------------------------------------
+# Selección de motor por petición
+# ---------------------------------------------------------------------------
+
+async def test_engine_can_be_chosen_per_request(client, fake_redis, no_retry):
+    """El playground compara motores mandando `engine` en cada petición."""
+    captured = {}
+
+    async def fake_process(content, doc_type, lang=None, today=None, engine=None):
+        from app.schemas.ocr import OCRResult
+
+        captured["engine"] = engine
+        return OCRResult(engine=engine or "default", document_confidence=0.9)
+
+    with patch("app.services.ocr_service.process", fake_process):
+        r = await client.post(
+            "/ocr/sync/upload", files=_files(), data={"engine": "easyocr"}
+        )
+
+    assert r.status_code == 200
+    assert captured["engine"] == "easyocr"
+
+
+async def test_unknown_engine_is_rejected(client, fake_redis):
+    r = await client.post("/ocr/sync/upload", files=_files(), data={"engine": "inventado"})
+
+    assert r.status_code == 400
+    assert "desconocido" in r.json()["detail"]
+
+
+async def test_engine_is_forwarded_to_the_queue(client, fake_redis):
+    from app.services import queue
+
+    with patch("app.services.storage_client.upload_temp", AsyncMock(return_value=IMAGE_URL)):
+        await client.post("/ocr/scan", files=_files(), data={"engine": "tesseract"})
+
+    task = await queue.dequeue(timeout=1)
+
+    assert task["engine"] == "tesseract"
+
+
+async def test_cache_distinguishes_engine(client, fake_redis, fake_engine, no_retry):
+    """Comparar motores sobre la misma foto no debe devolver el resultado cacheado."""
+    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
+
+    await client.post("/ocr/sync/upload", files=_files(), data={"engine": "tesseract"})
+    await client.post("/ocr/sync/upload", files=_files(), data={"engine": "easyocr"})
+
+    assert len(engine.calls) == 2
+
+
+# ---------------------------------------------------------------------------
 # Caché por hash de imagen
 # ---------------------------------------------------------------------------
 
 async def test_identical_image_is_not_reprocessed(client, fake_redis, fake_engine):
-    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     first = await client.post("/ocr/sync/upload", files=_files())
     second = await client.post("/ocr/sync/upload", files=_files())
@@ -403,8 +457,8 @@ async def test_identical_image_is_not_reprocessed(client, fake_redis, fake_engin
     assert len(engine.calls) == 1  # la segunda vez salió de la caché
 
 
-async def test_cache_distinguishes_doc_type(client, fake_redis, fake_engine):
-    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+async def test_cache_distinguishes_doc_type(client, fake_redis, fake_engine, no_retry):
+    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     await client.post("/ocr/sync/upload", files=_files(), data={"doc_type": "product_label"})
     await client.post("/ocr/sync/upload", files=_files(), data={"doc_type": "receipt"})
@@ -412,10 +466,28 @@ async def test_cache_distinguishes_doc_type(client, fake_redis, fake_engine):
     assert len(engine.calls) == 2
 
 
-async def test_layout_hint_depends_on_doc_type(client, fake_redis, fake_engine):
-    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=[44, 20])
+async def test_layout_hint_depends_on_doc_type(client, fake_redis, fake_engine, no_retry):
+    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     await client.post("/ocr/sync/upload", files=_files(), data={"doc_type": "product_label"})
     await client.post("/ocr/sync/upload", files=_files(), data={"doc_type": "receipt"})
 
     assert [call["layout"] for call in engine.calls] == ["sparse", "block"]
+
+
+async def test_low_confidence_triggers_more_attempts(client, fake_redis, fake_engine):
+    """Una lectura pobre reintenta con otras variantes de preparación."""
+    engine = fake_engine(LABEL_LINES, confidence=0.30, heights=LABEL_HEIGHTS)
+
+    await client.post("/ocr/sync/upload", files=_files())
+
+    assert len(engine.calls) > 1
+
+
+async def test_good_reading_does_not_retry(client, fake_redis, fake_engine):
+    """Si la primera lectura alcanza el umbral, no se gasta tiempo de más."""
+    engine = fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
+
+    await client.post("/ocr/sync/upload", files=_files())
+
+    assert len(engine.calls) == 1
