@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routes.health import router as health_router
 from app.routes.ocr import router as ocr_router
+from app.routes.playground import router as playground_router
 from app.services import queue
 
 logging.basicConfig(
@@ -37,3 +38,5 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(ocr_router)
+# Banco de pruebas manual; la propia ruta devuelve 404 si DEBUG está apagado.
+app.include_router(playground_router)

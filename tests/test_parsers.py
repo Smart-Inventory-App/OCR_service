@@ -144,6 +144,35 @@ def test_receipt_quantity_suffix_format():
     assert items[0].cantidad.value == 4
 
 
+def test_receipt_quantity_glued_to_name():
+    """Tesseract suele leer «2 x Leche» como «2xLeche», sin espacios."""
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "2xLeche Entera 1L 2.400,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "Leche Entera 1L"
+    assert items[0].cantidad.value == 2
+
+
+def test_receipt_unit_marker_does_not_split_a_word():
+    """«2 unidades Leche» no debe partirse en «idades Leche»."""
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "2 unidades Leche 2.400,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "unidades Leche"
+    assert items[0].cantidad.value == 2
+
+
+def test_receipt_name_keeps_trailing_x():
+    """Recortar la «x» rompería productos que se llaman «Max» o «Box»."""
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "1 x Jugo Max 1.200,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "Jugo Max"
+
+
 def test_receipt_implicit_quantity_is_one_with_lower_confidence():
     output = make_output(["ALMACEN", "FECHA 20/07/2026", "Aceite Girasol 900ml 3.100,00"])
 

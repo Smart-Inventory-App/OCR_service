@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     STORAGE_SERVICE_URL: str = "http://storage_service:8000"
     HTTP_TIMEOUT_SECONDS: float = 30.0
 
+    # URL del servicio Auth tal como la ve el NAVEGADOR (no la red de Docker).
+    # Sólo la usa la página de prueba (`/ocr/playground`) para hacer login.
+    AUTH_PUBLIC_URL: str = "http://localhost:8001"
+
     # Redis (cola de trabajos + caché de resultados)
     REDIS_URL: str = "redis://redis:6379/0"
     JOB_TTL_SECONDS: int = 86400

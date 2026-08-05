@@ -32,10 +32,19 @@ _TOTAL_LINE = re.compile(r"\b(total|importe\s+total)\b", re.IGNORECASE)
 # Números con formato monetario argentino: 1.234,56 · 1234,56 · 1234.56 · 1234
 _AMOUNT = re.compile(r"\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?")
 
-# «2 x Leche» · «2x Leche» · «2 Leche»
-_QTY_PREFIX = re.compile(r"^(\d{1,3})\s*(?:x|X|\*|u|un|unid\.?)?\s+(.{3,})$")
-# «Leche x 2» · «Leche 2 un»
-_QTY_SUFFIX = re.compile(r"^(.{3,}?)\s+(?:x|X)\s*(\d{1,3})$")
+# «2 x Leche» · «2x Leche» · «2xLeche» — el OCR suele comerse los espacios
+# alrededor de la «x», así que acá la separación es opcional.
+_QTY_PREFIX_X = re.compile(r"^(\d{1,3})\s*[xX*×]\s*(.{3,})$")
+# «2 un Leche» · «2 unid. Leche» — el marcador de unidades sí exige separación,
+# porque si no «2 unidades Leche» se partiría en medio de la palabra.
+_QTY_PREFIX_UNIT = re.compile(r"^(\d{1,3})\s*(?:u|un|unid\.?)\s+(.{3,})$")
+# «3 Yogur Frutilla» — cantidad sin marcador
+_QTY_PREFIX_PLAIN = re.compile(r"^(\d{1,3})\s+(.{3,})$")
+
+_QTY_PREFIXES = (_QTY_PREFIX_X, _QTY_PREFIX_UNIT, _QTY_PREFIX_PLAIN)
+
+# «Leche x 2»
+_QTY_SUFFIX = re.compile(r"^(.{3,}?)\s*[xX×]\s*(\d{1,3})$")
 
 _MIN_NAME_LENGTH = 3
 _MAX_NAME_LENGTH = 60
@@ -187,9 +196,10 @@ def _split_quantity(body: str) -> tuple[int | None, str | None]:
     """Devuelve `(cantidad, nombre)` según el formato de la línea."""
     body = body.strip(" -_.·*")
 
-    match = _QTY_PREFIX.match(body)
-    if match:
-        return int(match.group(1)), _clean_name(match.group(2))
+    for pattern in _QTY_PREFIXES:
+        match = pattern.match(body)
+        if match:
+            return int(match.group(1)), _clean_name(match.group(2))
 
     match = _QTY_SUFFIX.match(body)
     if match:
@@ -199,7 +209,8 @@ def _split_quantity(body: str) -> tuple[int | None, str | None]:
 
 
 def _clean_name(value: str) -> str | None:
-    cleaned = re.sub(r"\s+", " ", value).strip(" -_.·*x×")
+    # No se recortan letras (`x`): un producto puede llamarse "Max" o "Box".
+    cleaned = re.sub(r"\s+", " ", value).strip(" -_.·*")
     return cleaned or None
 
 

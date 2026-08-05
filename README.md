@@ -346,7 +346,24 @@ python -m app.worker
 
 ---
 
-## Probarlo
+## Pruebas y Ejecución
+
+### Banco de Pruebas en el Navegador (recomendado)
+
+```
+http://localhost:8003/ocr/playground
+```
+
+Página de prueba servida por el propio servicio. Replica el patrón de autenticación del backoffice: se inicia sesión **una sola vez** contra el servicio Auth, el token queda en `localStorage` y se adjunta automáticamente en cada consulta; si el servidor responde `401`, la sesión se cierra y vuelve al login, igual que el interceptor de axios del backoffice.
+
+Permite subir una imagen con el explorador de archivos, elegir el tipo de documento y el modo (sincrónico o asincrónico, este último con *polling* real del job), y muestra los campos con barras de confianza coloreadas según los umbrales: verde ≥ 0.85, ámbar ≥ 0.70, rojo por debajo. También expone el texto crudo y el JSON completo de la respuesta.
+
+> Sólo se sirve con `DEBUG=true`. Con `DEBUG=false` devuelve `404` y no figura en el OpenAPI:
+> es una herramienta de desarrollo, no parte del contrato del servicio.
+
+Si el servicio Auth no corre en `http://localhost:8001`, ajustá `AUTH_PUBLIC_URL` en el `.env` (es la URL tal como la ve el **navegador**, no el hostname interno de la red de Docker).
+
+### Desde la Terminal
 
 Con el servicio arriba y un token válido del servicio `auth`:
 

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCR — Banco de pruebas | Smart Inventory</title>
+<style>
+  :root{
+    --teal:#2dbfa8; --teal-dark:#25a691; --navy:#1e2a5a;
+    --bg:#f5f7fb; --card:#fff; --line:#e4e8f0;
+    --muted:#6b7690; --ok:#16a34a; --warn:#d97706; --bad:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--navy);
+       font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:26px;margin:0;font-weight:700}
+  h1 .t{color:var(--teal)}
+  .sub{color:var(--muted);font-size:14px;margin:4px 0 24px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:22px;margin-bottom:18px;box-shadow:0 1px 3px rgba(30,42,90,.06)}
+  label{display:block;font-weight:600;font-size:13px;margin:0 0 6px}
+  input,select{width:100%;padding:10px 12px;border:1px solid var(--line);
+               border-radius:8px;font:inherit;background:#fff;color:inherit}
+  input:focus,select:focus{outline:2px solid var(--teal);outline-offset:-1px;border-color:transparent}
+  button{background:var(--teal);color:#fff;border:0;border-radius:8px;padding:11px 20px;
+         font:inherit;font-weight:700;cursor:pointer}
+  button:hover:not(:disabled){background:var(--teal-dark)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--muted);font-weight:600;padding:8px 12px}
+  button.ghost:hover:not(:disabled){background:#eef1f7;color:var(--navy)}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+  .row>div{flex:1;min-width:170px}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .msg{padding:10px 14px;border-radius:8px;font-size:14px;margin-top:14px}
+  .msg.err{background:#fef2f2;color:var(--bad);border:1px solid #fecaca}
+  .msg.info{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+  .hide{display:none!important}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);font-size:14px}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  td.val{font-weight:600}
+  .meter{display:flex;align-items:center;gap:8px;min-width:130px}
+  .track{flex:1;height:6px;background:#eef1f7;border-radius:3px;overflow:hidden}
+  .fill{height:100%;border-radius:3px}
+  .num{font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted);min-width:38px}
+  .badge{display:inline-block;padding:4px 11px;border-radius:999px;font-size:12px;font-weight:700}
+  .badge.ok{background:#dcfce7;color:#15803d}
+  .badge.warn{background:#fef3c7;color:#b45309}
+  .stats{display:flex;gap:26px;flex-wrap:wrap;margin:16px 0;font-size:14px}
+  .stats b{display:block;font-size:19px;font-variant-numeric:tabular-nums}
+  .stats span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  pre{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:14px;
+      overflow-x:auto;font-size:13px;white-space:pre-wrap;margin:0}
+  details{margin-top:16px}
+  summary{cursor:pointer;font-weight:600;font-size:14px;color:var(--muted)}
+  .preview{max-width:100%;max-height:230px;border-radius:8px;border:1px solid var(--line)}
+  .who{font-size:13px;color:var(--muted)}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.4);
+        border-top-color:#fff;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:7px}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="t">Smart</span>Inventory</h1>
+  <p class="sub">Banco de pruebas del servicio OCR</p>
+
+  <!-- ── Login ─────────────────────────────────────────────── -->
+  <div class="card" id="loginCard">
+    <div class="row">
+      <div>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" placeholder="tu@email.com">
+      </div>
+      <div>
+        <label for="password">Contraseña</label>
+        <input id="password" type="password" autocomplete="current-password">
+      </div>
+      <div style="flex:0 0 auto">
+        <button id="loginBtn">Ingresar</button>
+      </div>
+    </div>
+    <div id="loginMsg" class="msg err hide"></div>
+    <p class="sub" style="margin:14px 0 0">
+      Se autentica contra el servicio Auth. El token queda guardado en este navegador
+      y se adjunta solo en cada consulta al OCR.
+    </p>
+  </div>
+
+  <!-- ── Sesión activa ─────────────────────────────────────── -->
+  <div class="card hide" id="sessionCard">
+    <div class="bar">
+      <span class="who">Sesión iniciada como <b id="who"></b></span>
+      <button class="ghost" id="logoutBtn">Cerrar sesión</button>
+    </div>
+  </div>
+
+  <!-- ── Escaneo ───────────────────────────────────────────── -->
+  <div class="card hide" id="scanCard">
+    <div class="row">
+      <div>
+        <label for="file">Imagen</label>
+        <input id="file" type="file" accept="image/jpeg,image/png,image/webp">
+      </div>
+      <div>
+        <label for="docType">Tipo de documento</label>
+        <select id="docType">
+          <option value="product_label">Etiqueta de producto</option>
+          <option value="receipt">Ticket / remito / factura</option>
+        </select>
+      </div>
+      <div>
+        <label for="mode">Modo</label>
+        <select id="mode">
+          <option value="sync">Sincrónico (respuesta directa)</option>
+          <option value="async">Asincrónico (como la App)</option>
+        </select>
+      </div>
+      <div style="flex:0 0 auto">
+        <button id="scanBtn" disabled>Procesar</button>
+      </div>
+    </div>
+    <div id="scanMsg" class="msg hide"></div>
+    <div id="previewBox" class="hide" style="margin-top:16px">
+      <img id="preview" class="preview" alt="Imagen a procesar">
+    </div>
+  </div>
+
+  <!-- ── Resultado ─────────────────────────────────────────── -->
+  <div class="card hide" id="resultCard">
+    <div class="bar">
+      <h2 style="font-size:17px;margin:0">Resultado</h2>
+      <span id="reviewBadge" class="badge"></span>
+    </div>
+
+    <div class="stats">
+      <div><b id="docConf"></b><span>Confianza documento</span></div>
+      <div><b id="engine"></b><span>Motor</span></div>
+      <div><b id="ms"></b><span>Tiempo</span></div>
+    </div>
+
+    <table id="fieldsTable">
+      <thead><tr><th>Campo</th><th>Valor</th><th style="width:180px">Confianza</th></tr></thead>
+      <tbody id="fieldsBody"></tbody>
+    </table>
+
+    <div id="itemsBox" class="hide">
+      <h3 style="font-size:14px;margin:22px 0 0">Ítems detectados</h3>
+      <table>
+        <thead><tr><th>Producto</th><th style="width:90px">Cantidad</th><th style="width:180px">Confianza</th></tr></thead>
+        <tbody id="itemsBody"></tbody>
+      </table>
+    </div>
+
+    <details>
+      <summary>Texto crudo reconocido</summary>
+      <pre id="rawText" style="margin-top:10px"></pre>
+    </details>
+    <details>
+      <summary>Respuesta JSON completa</summary>
+      <pre id="rawJson" style="margin-top:10px"></pre>
+    </details>
+  </div>
+</div>
+
+<script>
+// El servidor reemplaza este marcador por `AUTH_PUBLIC_URL` al servir la página.
+const AUTH_URL = "__AUTH_PUBLIC_URL__";
+const TOKEN_KEY = "ocr_playground_token";
+const EMAIL_KEY = "ocr_playground_email";
+
+// Umbrales de la propuesta: pintan las barras de confianza.
+const FIELD_THRESHOLD = 0.85;
+const DOC_THRESHOLD = 0.70;
+
+const $ = (id) => document.getElementById(id);
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+
+function setSession(token, email) {
+  if (token) {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(EMAIL_KEY, email);
+  } else {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(EMAIL_KEY);
+  }
+  render();
+}
+
+function render() {
+  const logged = Boolean(getToken());
+  $("loginCard").classList.toggle("hide", logged);
+  $("sessionCard").classList.toggle("hide", !logged);
+  $("scanCard").classList.toggle("hide", !logged);
+  if (!logged) $("resultCard").classList.add("hide");
+  $("who").textContent = localStorage.getItem(EMAIL_KEY) || "";
+}
+
+function show(el, text, kind) {
+  el.textContent = text;
+  el.className = "msg " + (kind || "info");
+}
+
+/** Igual que el interceptor de axios del backoffice: adjunta el token y,
+ *  si el servidor responde 401, cierra la sesión y vuelve al login. */
+async function authFetch(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: { ...(options.headers || {}), Authorization: `Bearer ${getToken()}` },
+  });
+  if (res.status === 401) {
+    setSession(null, null);
+    throw new Error("La sesión expiró. Ingresá de nuevo.");
+  }
+  return res;
+}
+
+// ── Login ────────────────────────────────────────────────────
+$("loginBtn").addEventListener("click", async () => {
+  const email = $("email").value.trim();
+  const password = $("password").value;
+  const msg = $("loginMsg");
+  msg.classList.add("hide");
+
+  if (!email || !password) {
+    show(msg, "Completá email y contraseña.", "err");
+    return;
+  }
+
+  $("loginBtn").disabled = true;
+  try {
+    const res = await fetch(`${AUTH_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // `firebase_token` es obligatorio en el contrato de Auth; vacío es válido.
+      body: JSON.stringify({ email, password, firebase_token: "" }),
+    });
+
+    if (res.status === 401) throw new Error("Credenciales inválidas.");
+    if (res.status === 403) throw new Error("La cuenta está deshabilitada.");
+    if (!res.ok) throw new Error(`Auth respondió ${res.status}.`);
+
+    const { access_token } = await res.json();
+    $("password").value = "";
+    setSession(access_token, email);
+  } catch (err) {
+    const offline = err instanceof TypeError;
+    show(msg, offline ? `No se pudo contactar al servicio Auth en ${AUTH_URL}.` : err.message, "err");
+    msg.classList.remove("hide");
+  } finally {
+    $("loginBtn").disabled = false;
+  }
+});
+
+$("logoutBtn").addEventListener("click", () => setSession(null, null));
+
+// ── Selección de imagen ──────────────────────────────────────
+$("file").addEventListener("change", () => {
+  const file = $("file").files[0];
+  $("scanBtn").disabled = !file;
+  $("previewBox").classList.toggle("hide", !file);
+  if (file) $("preview").src = URL.createObjectURL(file);
+});
+
+// ── Procesamiento ────────────────────────────────────────────
+$("scanBtn").addEventListener("click", async () => {
+  const file = $("file").files[0];
+  if (!file) return;
+
+  const body = new FormData();
+  body.append("file", file);
+  body.append("doc_type", $("docType").value);
+
+  const msg = $("scanMsg");
+  const btn = $("scanBtn");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Procesando';
+  $("resultCard").classList.add("hide");
+  msg.classList.remove("hide");
+
+  try {
+    let result;
+    if ($("mode").value === "sync") {
+      show(msg, "Procesando la imagen…");
+      const res = await authFetch("/ocr/sync/upload", { method: "POST", body });
+      if (!res.ok) throw new Error((await res.json()).detail || `Error ${res.status}`);
+      result = (await res.json()).result;
+    } else {
+      result = await runAsync(body, msg);
+    }
+    msg.classList.add("hide");
+    renderResult(result);
+  } catch (err) {
+    show(msg, err.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Procesar";
+  }
+});
+
+/** Flujo real de la App: encola con /ocr/scan y hace polling del job. */
+async function runAsync(body, msg) {
+  show(msg, "Subiendo la imagen temporal y encolando el trabajo…");
+  const res = await authFetch("/ocr/scan", { method: "POST", body });
+  if (!res.ok) throw new Error((await res.json()).detail || `Error ${res.status}`);
+
+  const { job_id } = await res.json();
+
+  for (let attempt = 1; attempt <= 40; attempt++) {
+    await new Promise((r) => setTimeout(r, 700));
+
+    const poll = await authFetch(`/ocr/jobs/${job_id}`);
+    if (!poll.ok) throw new Error(`No se pudo consultar el trabajo (${poll.status})`);
+
+    const job = await poll.json();
+    show(msg, `Trabajo ${job_id.slice(0, 8)}… — estado: ${job.status}`);
+
+    if (job.status === "done") return job.result;
+    if (job.status === "failed") throw new Error(job.error || "El procesamiento falló.");
+  }
+  throw new Error("Se agotó el tiempo de espera del trabajo.");
+}
+
+// ── Presentación ─────────────────────────────────────────────
+function meter(confidence) {
+  const pct = Math.round(confidence * 100);
+  const color = confidence >= FIELD_THRESHOLD ? "var(--ok)"
+              : confidence >= DOC_THRESHOLD ? "var(--warn)" : "var(--bad)";
+  return `<div class="meter">
+            <div class="track"><div class="fill" style="width:${pct}%;background:${color}"></div></div>
+            <span class="num">${confidence.toFixed(2)}</span>
+          </div>`;
+}
+
+function renderResult(result) {
+  $("docConf").textContent = result.document_confidence.toFixed(2);
+  $("docConf").style.color =
+    result.document_confidence >= DOC_THRESHOLD ? "var(--ok)" : "var(--bad)";
+  $("engine").textContent = result.engine;
+  $("ms").textContent = `${result.processing_ms} ms`;
+
+  const badge = $("reviewBadge");
+  badge.textContent = result.needs_review ? "Requiere revisión manual" : "Listo para cargar";
+  badge.className = "badge " + (result.needs_review ? "warn" : "ok");
+
+  $("fieldsBody").innerHTML = Object.entries(result.fields).map(([name, f]) => `
+    <tr>
+      <td>${name}</td>
+      <td class="val">${f.value === null ? "<span style='color:var(--bad)'>no detectado</span>" : escapeHtml(String(f.value))}</td>
+      <td>${meter(f.confidence)}</td>
+    </tr>`).join("");
+
+  const hasItems = result.items && result.items.length > 0;
+  $("itemsBox").classList.toggle("hide", !hasItems);
+  if (hasItems) {
+    $("itemsBody").innerHTML = result.items.map((item) => `
+      <tr>
+        <td class="val">${escapeHtml(String(item.nombre_producto.value))}</td>
+        <td class="val">${item.cantidad.value}</td>
+        <td>${meter(Math.min(item.nombre_producto.confidence, item.cantidad.confidence))}</td>
+      </tr>`).join("");
+  }
+
+  $("rawText").textContent = result.raw_text || "(vacío)";
+  $("rawJson").textContent = JSON.stringify(result, null, 2);
+  $("resultCard").classList.remove("hide");
+}
+
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value;
+  return div.innerHTML;
+}
+
+render();
+</script>
+</body>
+</html>
