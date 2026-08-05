@@ -32,12 +32,19 @@ async def process_job(task: dict) -> None:
 
     try:
         content = await image_loader.from_url(image_url)
+        image_loader.validate(content)
         fingerprint = image_loader.fingerprint(content)
 
-        result = await queue.get_cached(fingerprint, doc_type, task["lang"])
+        engine = task.get("engine")
+        # El motor forma parte de la clave: comparar motores no debe dar caché.
+        cache_lang = f"{task['lang']}:{engine}" if engine else task["lang"]
+
+        result = await queue.get_cached(fingerprint, doc_type, cache_lang)
         if result is None:
-            result = await ocr_service.process(content, doc_type, task["lang"])
-            await queue.set_cached(fingerprint, doc_type, task["lang"], result)
+            result = await ocr_service.process(
+                content, doc_type, task["lang"], engine=engine
+            )
+            await queue.set_cached(fingerprint, doc_type, cache_lang, result)
 
         await queue.mark_done(job_id, result)
         logger.info("Job %s completado (confianza=%.2f)", job_id, result.document_confidence)

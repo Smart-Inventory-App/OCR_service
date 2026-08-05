@@ -68,73 +68,97 @@ class _Renderer:
 
 
 # (archivo, líneas, tamaño, rotación, ground truth)
+#
+# Las etiquetas imitan la jerarquía tipográfica de un envase real: la marca en
+# grande y el nombre del producto debajo, más chico. Es justo lo que rompía la
+# heurística anterior de "el nombre es la línea más grande", así que el dataset
+# sintético también sirve de regresión para eso.
 DOCUMENTS = [
     (
         "etiqueta_leche.jpg",
         [
-            ("LECHE ENTERA 1L", 62, True),
-            ("La Serenisima", 34, False),
-            ("VTO 15/08/2027", 40, False),
-            ("LOTE A2291", 28, False),
+            ("La Serenisima", 84, True),
+            ("LECHE ENTERA", 44, True),
+            ("1 Litro", 30, False),
         ],
-        (1000, 620),
+        (1000, 480),
         0,
         {
             "doc_type": "product_label",
-            "fields": {"nombre_producto": "LECHE ENTERA 1L", "fecha_vencimiento": "2027-08-15"},
+            "fields": {"nombre_producto": "LECHE ENTERA", "marca": "La Serenisima"},
         },
     ),
     (
         "etiqueta_yogur.jpg",
         [
-            ("Industria Argentina", 26, False),
-            ("YOGUR FIRME FRUTILLA", 58, True),
-            ("CONS. PREF. 01/12/2026", 36, False),
-            ("Peso neto 190g", 26, False),
+            ("Yogurisimo", 84, True),
+            ("YOGUR FIRME FRUTILLA", 42, True),
+            ("190 g", 28, False),
         ],
-        (1000, 620),
+        (1100, 480),
         0,
         {
             "doc_type": "product_label",
-            "fields": {
-                "nombre_producto": "YOGUR FIRME FRUTILLA",
-                "fecha_vencimiento": "2026-12-01",
-            },
+            "fields": {"nombre_producto": "YOGUR FIRME FRUTILLA", "marca": "Yogurisimo"},
         },
     ),
     (
         "etiqueta_arroz.jpg",
         [
-            ("ARROZ LARGO FINO 1KG", 56, True),
-            ("VENCE 20/03/2028", 38, False),
-            ("SIN TACC", 26, False),
+            ("Gallo", 84, True),
+            ("ARROZ LARGO FINO", 44, True),
+            ("1 kg", 28, False),
         ],
-        (1000, 560),
+        (1000, 480),
         0,
         {
             "doc_type": "product_label",
-            "fields": {
-                "nombre_producto": "ARROZ LARGO FINO 1KG",
-                "fecha_vencimiento": "2028-03-20",
-            },
+            "fields": {"nombre_producto": "ARROZ LARGO FINO", "marca": "Gallo"},
         },
     ),
     (
         # Inclinada a propósito: ejercita el paso de deskew del pipeline.
         "etiqueta_aceite_inclinada.jpg",
         [
-            ("ACEITE DE GIRASOL 900ML", 54, True),
-            ("VTO 30/09/2027", 38, False),
+            ("Natura", 84, True),
+            ("ACEITE DE GIRASOL", 42, True),
+            ("900 ml", 28, False),
         ],
-        (1000, 460),
+        (1000, 480),
         6,
         {
             "doc_type": "product_label",
-            "fields": {
-                "nombre_producto": "ACEITE DE GIRASOL 900ML",
-                "fecha_vencimiento": "2027-09-30",
-            },
+            "fields": {"nombre_producto": "ACEITE DE GIRASOL", "marca": "Natura"},
         },
+    ),
+    (
+        "vencimiento_leche.jpg",
+        [("VTO 15/08/2027", 54, False), ("LOTE A2291", 34, False)],
+        (760, 260),
+        0,
+        {"doc_type": "expiry_date", "fields": {"fecha_vencimiento": "2027-08-15"}},
+    ),
+    (
+        # Girada un cuarto de vuelta, que es como llegan las fotos del canto del
+        # envase: ejercita la búsqueda de orientación del coordinador.
+        "vencimiento_yogur_girado.jpg",
+        [("CONS. PREF. 01/12/2026", 50, False), ("L: A2291 B 09:15", 34, False)],
+        (860, 260),
+        90,
+        {"doc_type": "expiry_date", "fields": {"fecha_vencimiento": "2026-12-01"}},
+    ),
+    (
+        # Sello con las dos fechas juntas: la de elaboración no debe ganarle a la
+        # de vencimiento.
+        "vencimiento_arroz_sello.jpg",
+        [
+            ("ELAB.: 20/03/2026", 46, False),
+            ("VTO.: 20/03/2028", 46, False),
+            ("L: 2291 B 09:15", 32, False),
+        ],
+        (800, 340),
+        0,
+        {"doc_type": "expiry_date", "fields": {"fecha_vencimiento": "2028-03-20"}},
     ),
     (
         "ticket_super.jpg",

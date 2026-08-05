@@ -72,6 +72,7 @@ async def enqueue(
     lang: str,
     token: str,
     discard_after: bool,
+    engine: str | None = None,
 ) -> str:
     """Registra un job en estado `queued` y lo encola. Devuelve el `job_id`."""
     job_id = uuid.uuid4().hex
@@ -92,6 +93,7 @@ async def enqueue(
         "lang": lang,
         "token": token,
         "discard_after": discard_after,
+        "engine": engine,
     }
 
     try:

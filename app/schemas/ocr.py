@@ -7,10 +7,23 @@ FieldValue = Union[str, int, float, None]
 
 
 class DocType(str, Enum):
-    """Los dos casos de entrada que define la propuesta."""
+    """Los tres tipos de entrada que acepta el servicio.
+
+    La etiqueta y la fecha de vencimiento eran un solo caso y ahora son dos. El
+    motivo es medido: en una foto de la etiqueta la fecha casi nunca entra (está
+    impresa en otra cara del envase), y cuando entra, la preparación de imagen
+    que hace legible el logo es exactamente la que borra el sello de matriz de
+    puntos. Pidiendo dos fotos, cada una se procesa con la cadena que le sirve.
+    """
 
     PRODUCT_LABEL = "product_label"
+    """Etiqueta en primer plano: nombre, marca y detalles del producto."""
+
+    EXPIRY_DATE = "expiry_date"
+    """Sello de vencimiento sobre el envase: sólo la fecha."""
+
     RECEIPT = "receipt"
+    """Ticket, remito o factura: ítems con cantidad, fecha de compra y total."""
 
 
 class JobStatus(str, Enum):
@@ -41,11 +54,27 @@ class OCRResult(BaseModel):
     raw_text: str = ""
     processing_ms: int = 0
 
+    rotation: int = Field(
+        default=0,
+        description="Giro con el que se obtuvo esta lectura (0, 90, 180 o 270).",
+    )
+    attempts: int = Field(
+        default=1,
+        description="Cuántas combinaciones de giro y filtros hizo falta probar.",
+    )
+
 
 class OCRJobRequest(BaseModel):
     image_url: HttpUrl
     doc_type: DocType = DocType.PRODUCT_LABEL
     lang: str | None = None
+    engine: str | None = Field(
+        default=None,
+        description=(
+            "Motor a usar: `tesseract`, `easyocr` o `hybrid`. "
+            "Si se omite, se usa el configurado en `OCR_ENGINE`."
+        ),
+    )
     discard_after: bool = Field(
         default=False,
         description=(
@@ -73,3 +102,14 @@ class OCRJobState(BaseModel):
 class OCRSyncResponse(BaseModel):
     doc_type: DocType
     result: OCRResult
+
+
+class EngineStatus(BaseModel):
+    """Estado de un servicio de motor, tal como lo ve el coordinador."""
+
+    name: str
+    url: str
+    available: bool
+    version: str = "desconocida"
+    languages: list[str] = Field(default_factory=list)
+    supports_preprocessing: bool = False

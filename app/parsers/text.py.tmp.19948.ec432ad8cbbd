@@ -1,9 +1,0 @@
-"""Normalización de texto compartida por los parsers."""
-
-import unicodedata
-
-
-def fold(value: str) -> str:
-    """Minúsculas sin acentos, para comparar contra palabras clave."""
-    decomposed = unicodedata.normalize("NFKD", value.lower())
-    return "".join(char for char in decomposed if not unicodedata.combining(char))

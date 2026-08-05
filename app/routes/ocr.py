@@ -19,6 +19,8 @@ from app.schemas.ocr import (
     OCRJobState,
     OCRSyncResponse,
 )
+from app.engines.factory import build_engine
+from app.engines.remote import EngineUnavailable
 from app.services import image_loader, ocr_service, queue, storage_client
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ async def create_job(
             lang=body.lang or settings.OCR_LANG,
             token=token,
             discard_after=body.discard_after,
+            engine=_validate_engine(body.engine),
         )
     except queue.QueueUnavailable as exc:
         raise HTTPException(
@@ -57,6 +60,7 @@ async def scan(
     file: UploadFile = File(...),
     doc_type: DocType = Form(default=DocType.PRODUCT_LABEL),
     lang: str | None = Form(default=None),
+    engine: str | None = Form(default=None),
     token: str = Depends(get_bearer_token),
     _user: dict = Depends(get_current_user),
 ):
@@ -65,6 +69,7 @@ async def scan(
     La imagen vive en `bazaar/ocr-temp` sólo mientras se la procesa: el worker la
     descarta al terminar (`discard_after=True`).
     """
+    engine = _validate_engine(engine)
     content = await _read_image(file)
 
     try:
@@ -87,6 +92,7 @@ async def scan(
             lang=lang or settings.OCR_LANG,
             token=token,
             discard_after=True,
+            engine=engine,
         )
     except queue.QueueUnavailable as exc:
         # Sin cola el job no se procesará: la imagen temporal se descarta ya.
@@ -137,10 +143,14 @@ async def sync_from_url(
 
     try:
         content = await image_loader.from_url(image_url)
+        image_loader.validate(content)
     except image_loader.ImageLoadError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    result = await _process_cached(content, body.doc_type, body.lang or settings.OCR_LANG)
+    result = await _process_cached(
+        content, body.doc_type, body.lang or settings.OCR_LANG,
+        _validate_engine(body.engine),
+    )
 
     if body.discard_after:
         await storage_client.discard_temp(image_url, token)
@@ -153,6 +163,7 @@ async def sync_from_upload(
     file: UploadFile = File(...),
     doc_type: DocType = Form(default=DocType.PRODUCT_LABEL),
     lang: str | None = Form(default=None),
+    engine: str | None = Form(default=None),
     _user: dict = Depends(get_current_user),
 ):
     """Procesa un binario subido directamente, sin pasar por el storage.
@@ -160,27 +171,53 @@ async def sync_from_upload(
     Es la vía standalone: permite ejercitar el pipeline completo sin Cloudinary
     ni Redis (la caché se saltea si Redis no está disponible).
     """
+    engine = _validate_engine(engine)
     content = await _read_image(file)
-    result = await _process_cached(content, doc_type, lang or settings.OCR_LANG)
+    result = await _process_cached(content, doc_type, lang or settings.OCR_LANG, engine)
 
     return OCRSyncResponse(doc_type=doc_type, result=result)
 
 
-async def _process_cached(content: bytes, doc_type: DocType, lang: str):
+async def _process_cached(
+    content: bytes,
+    doc_type: DocType,
+    lang: str,
+    engine: str | None = None,
+):
     """Procesa la imagen reutilizando el resultado cacheado por hash si existe."""
     fingerprint = image_loader.fingerprint(content)
+    # El motor forma parte de la clave: comparar motores no debe devolver caché.
+    cache_lang = f"{lang}:{engine}" if engine else lang
 
-    cached = await queue.get_cached(fingerprint, doc_type, lang)
+    cached = await queue.get_cached(fingerprint, doc_type, cache_lang)
     if cached is not None:
         return cached
 
     try:
-        result = await ocr_service.process(content, doc_type, lang)
-    except image_loader.ImageLoadError as exc:
+        result = await ocr_service.process(content, doc_type, lang, engine=engine)
+    except EngineUnavailable as exc:
+        # Ningún intento llegó a correr: es una falla de infraestructura, no una
+        # lectura pobre. Devolver un resultado vacío la disfrazaría.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"El motor OCR no está disponible: {exc}",
+        )
+
+    await queue.set_cached(fingerprint, doc_type, cache_lang, result)
+    return result
+
+
+def _validate_engine(name: str | None) -> str | None:
+    """Rechaza un motor desconocido con 400 en vez de fallar al procesar."""
+    if name is None:
+        return None
+
+    try:
+        build_engine(name)
+    except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    await queue.set_cached(fingerprint, doc_type, lang, result)
-    return result
+    return name
 
 
 async def _read_image(file: UploadFile) -> bytes:
@@ -197,5 +234,12 @@ async def _read_image(file: UploadFile) -> bytes:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El archivo está vacío",
         )
+
+    # Se valida acá y no en el motor para devolver un 400 claro antes de encolar
+    # un trabajo que iba a fallar igual.
+    try:
+        image_loader.validate(content)
+    except image_loader.ImageLoadError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     return content

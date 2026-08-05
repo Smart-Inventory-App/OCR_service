@@ -1,16 +1,21 @@
-"""Carga de imágenes desde URL (Cloudinary) o bytes.
+"""Carga y validación de imágenes.
 
 El servicio recibe la **URL** de la imagen, respetando el patrón de
 `image_storage_service` ("los servicios consumidores solo operan con URLs").
 También se soporta el binario directo para tests y uso standalone.
+
+Desde que los motores viven en servicios aparte, este servicio ya no decodifica
+la imagen: la reenvía tal cual y quien la decodifica es el motor, que es el que
+tiene OpenCV. Lo único que se hace acá es comprobar que el binario **sea** una
+imagen, para devolver un 400 claro en vez de propagar un error del motor.
 """
 
 import hashlib
+import io
 import logging
 
-import cv2
 import httpx
-import numpy as np
+from PIL import Image, UnidentifiedImageError
 
 from app.core.config import settings
 
@@ -20,11 +25,11 @@ MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024
 
 
 class ImageLoadError(Exception):
-    """La imagen no pudo descargarse o decodificarse."""
+    """La imagen no pudo descargarse o no es una imagen válida."""
 
 
 async def from_url(url: str) -> bytes:
-    """Descarga la imagen. No sigue redirecciones a hosts arbitrarios."""
+    """Descarga la imagen."""
     try:
         async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
             response = await client.get(url, follow_redirects=True)
@@ -44,15 +49,17 @@ async def from_url(url: str) -> bytes:
     return content
 
 
-def decode(content: bytes) -> np.ndarray:
-    """Decodifica bytes a una matriz BGR de OpenCV."""
-    buffer = np.frombuffer(content, dtype=np.uint8)
-    image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+def validate(content: bytes) -> tuple[int, int]:
+    """Comprueba que el binario sea una imagen y devuelve su tamaño en píxeles.
 
-    if image is None:
-        raise ImageLoadError("El archivo no es una imagen válida")
-
-    return image
+    `Image.open` sólo lee la cabecera: no descomprime el archivo entero, así que
+    validar es barato aunque la foto sea grande.
+    """
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            return image.size
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ImageLoadError("El archivo no es una imagen válida") from exc
 
 
 def fingerprint(content: bytes) -> str:

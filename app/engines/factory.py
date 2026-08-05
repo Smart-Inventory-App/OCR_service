@@ -1,84 +1,95 @@
-"""Selección del motor OCR según configuración.
+"""Selección del motor OCR.
 
-`OCR_ENGINE` en `.env` define el motor: `tesseract` (default del MVP), `easyocr`
-o `hybrid`. El modo híbrido implementa el "enfoque híbrido" que la propuesta no
-descarta: motor principal + motor de respaldo cuando la confianza no alcanza el
-umbral.
+`OCR_ENGINE` en `.env` define el motor por defecto: `tesseract`, `easyocr` o
+`hybrid`. Cada motor concreto es un servicio aparte al que se llega por HTTP; el
+híbrido no lo es: es una **estrategia de este servicio** que combina los otros
+dos, y por eso vive acá y no en ningún repositorio de motor.
 """
 
 import logging
 
-import numpy as np
-
 from app.core.config import settings
 from app.engines.base import OCREngine, RawOCROutput
-from app.engines.easyocr_engine import EasyOCREngine
-from app.engines.tesseract_engine import TesseractEngine
+from app.engines.remote import EngineUnavailable, RemoteEngine
+from app.pipeline.transform import Transform
 
 logger = logging.getLogger(__name__)
 
-_BUILDERS = {
-    TesseractEngine.name: TesseractEngine,
-    EasyOCREngine.name: EasyOCREngine,
-}
+TESSERACT = "tesseract"
+EASYOCR = "easyocr"
+HYBRID = "hybrid"
+
+CONCRETE_ENGINES = (TESSERACT, EASYOCR)
+VALID_ENGINES = (*CONCRETE_ENGINES, HYBRID)
 
 _cache: dict[str, OCREngine] = {}
 
 
 class HybridEngine:
-    """Corre el motor principal y reintenta con el de respaldo si hace falta.
+    """El "enfoque híbrido" que la propuesta no descarta.
 
-    El criterio de reintento es la confianza media del motor: si queda por
-    debajo de `HYBRID_FALLBACK_THRESHOLD`, se prueba el respaldo y se conserva
-    la salida más confiable de las dos.
+    Corre el motor principal y, si su lectura no alcanza el umbral, reintenta con
+    el de respaldo y conserva la mejor de las dos. No es un motor: no reconoce
+    nada por sí mismo. Es la decisión de cuándo vale la pena pagar el motor caro,
+    y esa decisión es del coordinador.
+
+    Expone `primary` y `fallback` porque `ocr_service` necesita orquestarlos con
+    más contexto que el que tiene un `run()` suelto: sobre una foto girada, por
+    ejemplo, conviene buscar la orientación con el motor barato y recién después
+    pasarle al caro la orientación que ya se sabe buena.
     """
 
-    def __init__(
-        self,
-        primary: OCREngine,
-        fallback: OCREngine,
-        threshold: float,
-    ) -> None:
+    name = HYBRID
+    # El híbrido ya ES una estrategia de reintento: variarle los filtros por
+    # fuera multiplicaría las corridas del motor caro.
+    supports_preprocessing = False
+
+    def __init__(self, primary: OCREngine, fallback: OCREngine, threshold: float) -> None:
         self.primary = primary
         self.fallback = fallback
         self.threshold = threshold
-        self.name = f"hybrid({primary.name}+{fallback.name})"
 
     def is_available(self) -> bool:
+        """Alcanza con el principal: sin respaldo el híbrido degrada, no falla."""
         return self.primary.is_available()
 
     def run(
         self,
-        image: np.ndarray,
+        content: bytes,
         lang: str = "spa",
         layout: str = "block",
+        transform: Transform | None = None,
     ) -> RawOCROutput:
-        result = self.primary.run(image, lang, layout)
+        """Un intento del híbrido: principal y, si hace falta, respaldo."""
+        result = self.primary.run(content, lang, layout, transform)
 
         if result.mean_confidence >= self.threshold:
             return result
 
-        if not self.fallback.is_available():
+        try:
+            retry = self.fallback.run(content, lang, layout, transform)
+        except EngineUnavailable as exc:
             logger.warning(
-                "Confianza baja (%.2f) pero el motor de respaldo '%s' no está disponible",
+                "Confianza baja (%.2f) pero el respaldo '%s' no respondió: %s",
                 result.mean_confidence,
                 self.fallback.name,
+                exc,
             )
             return result
 
         logger.info(
-            "Confianza %.2f < %.2f: reintentando con '%s'",
+            "Híbrido: %s dio %.2f, %s dio %.2f",
+            self.primary.name,
             result.mean_confidence,
-            self.threshold,
             self.fallback.name,
+            retry.mean_confidence,
         )
-        retry = self.fallback.run(image, lang, layout)
 
         return retry if retry.mean_confidence > result.mean_confidence else result
 
 
 def build_engine(name: str | None = None) -> OCREngine:
-    """Devuelve el motor pedido (memoizado: cargar modelos es costoso)."""
+    """Devuelve el motor pedido (memoizado: guarda el estado del cliente HTTP)."""
     key = (name or settings.OCR_ENGINE).strip().lower()
 
     if key not in _cache:
@@ -88,25 +99,22 @@ def build_engine(name: str | None = None) -> OCREngine:
 
 
 def _build(key: str) -> OCREngine:
-    if key == "hybrid":
-        fallback = settings.HYBRID_FALLBACK_ENGINE.strip().lower()
-        if fallback not in _BUILDERS:
-            raise ValueError(
-                f"HYBRID_FALLBACK_ENGINE='{fallback}' debe ser un motor concreto: "
-                f"{', '.join(sorted(_BUILDERS))}"
-            )
+    if key == HYBRID:
         return HybridEngine(
-            primary=build_engine(TesseractEngine.name),
-            fallback=build_engine(fallback),
+            primary=build_engine(settings.HYBRID_PRIMARY_ENGINE),
+            fallback=build_engine(settings.HYBRID_FALLBACK_ENGINE),
             threshold=settings.HYBRID_FALLBACK_THRESHOLD,
         )
 
-    builder = _BUILDERS.get(key)
-    if builder is None:
-        valid = ", ".join([*sorted(_BUILDERS), "hybrid"])
-        raise ValueError(f"Motor OCR '{key}' desconocido. Motores válidos: {valid}")
+    if key == TESSERACT:
+        return RemoteEngine(TESSERACT, settings.TESSERACT_SERVICE_URL, supports_preprocessing=True)
 
-    return builder()
+    if key == EASYOCR:
+        return RemoteEngine(EASYOCR, settings.EASYOCR_SERVICE_URL, supports_preprocessing=False)
+
+    raise ValueError(
+        f"Motor OCR '{key}' desconocido. Motores válidos: {', '.join(VALID_ENGINES)}"
+    )
 
 
 def reset_cache() -> None:

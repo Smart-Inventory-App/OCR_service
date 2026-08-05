@@ -17,11 +17,15 @@ from app.core.config import settings
 from app.engines.base import OCRWord, RawOCROutput
 from app.schemas.ocr import ExtractedField
 
-# Peso relativo de cada campo clave en `document_confidence`.
+# Peso relativo de cada campo en `document_confidence`. Los campos que la
+# propuesta nombra como clave pesan el doble que los que enriquecen el alta pero
+# que el usuario puede completar de memoria.
 FIELD_WEIGHTS: dict[str, float] = {
     "nombre_producto": 1.0,
     "fecha_vencimiento": 1.0,
     "fecha_compra": 1.0,
+    "marca": 0.5,
+    "detalles": 0.25,
     "comercio": 0.5,
     "total": 0.5,
 }

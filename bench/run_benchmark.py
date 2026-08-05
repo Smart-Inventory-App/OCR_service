@@ -7,19 +7,19 @@ La propuesta lo pide explícitamente:
     métricas como precisión de reconocimiento, tiempo de respuesta y consumo de
     recursos."
 
-Corre cada motor sobre las mismas imágenes con el mismo preprocesamiento y emite
-una tabla comparativa: precisión por campo, precisión por documento, latencia
-media y memoria. Es el insumo para la decisión final del motor.
+Corre cada motor sobre las mismas imágenes **a través del coordinador**, es
+decir con la misma estrategia de intentos que usa la App, y emite una tabla
+comparativa: precisión por campo, documentos que superan el umbral, latencia
+total y cuánto de esa latencia es el motor.
 
-Uso:
+    python -m bench.run_benchmark --dataset bench/sample_res_product
+    python -m bench.run_benchmark --dataset bench/sample_dataset --engines tesseract
+    python -m bench.run_benchmark --dataset bench/sample_res_product_expiredate
 
-    python -m bench.run_benchmark                          # todos los motores disponibles
-    python -m bench.run_benchmark --engines tesseract       # sólo uno
-    python -m bench.run_benchmark --no-preprocess           # medir el aporte del preprocesamiento
-    python -m bench.run_benchmark --dataset bench/dataset   # otro dataset
-
-Este script NO forma parte del deploy del MVP: EasyOCR y PaddleOCR están
-comentados en `requirements.txt` y se instalan sólo para correr el benchmark.
+Requiere que los servicios de motor estén levantados (`ocr_service_tesseract` y
+`ocr_service_easyocr`). El consumo de memoria ya no se mide desde acá: cada motor
+es un contenedor aparte y su memoria se lee con `docker stats`, que es la medida
+que importa para decidir el despliegue.
 """
 
 import argparse
@@ -27,21 +27,28 @@ import json
 import statistics
 import sys
 import time
-import tracemalloc
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rapidfuzz import fuzz
+
 from app.core.config import settings
 from app.engines import factory
-from app.pipeline import postprocess, preprocess
-from app.pipeline.preprocess import PreprocessConfig
+from app.parsers.text import fold
 from app.schemas.ocr import DocType, OCRResult
-from app.services import image_loader, ocr_service
+from app.services import ocr_service
 
 DEFAULT_DATASET = Path("bench/dataset")
 GROUND_TRUTH_FILE = "ground_truth.json"
 
 CANDIDATE_ENGINES = ("tesseract", "easyocr", "hybrid")
+
+# Un nombre de producto se da por correcto si coincide con esta similitud: el
+# motor puede equivocarse en un carácter sin que el campo deje de servir.
+NAME_SIMILARITY = 90
+
+FIELD_ACCURACY_TARGET = 0.85
+"""Criterio de la propuesta: precisión ≥ 85% en la extracción de campos clave."""
 
 
 @dataclass
@@ -52,7 +59,11 @@ class DocumentScore:
     total_fields: int = 0
     document_confidence: float = 0.0
     elapsed_ms: float = 0.0
+    attempts: int = 0
+    rotation: int = 0
     error: str | None = None
+    missed: list[str] = field(default_factory=list)
+    per_field: dict[str, bool] = field(default_factory=dict)
 
     @property
     def field_accuracy(self) -> float:
@@ -63,7 +74,6 @@ class DocumentScore:
 class EngineReport:
     engine: str
     documents: list[DocumentScore] = field(default_factory=list)
-    peak_memory_mb: float = 0.0
 
     @property
     def field_accuracy(self) -> float:
@@ -90,8 +100,37 @@ class EngineReport:
         return statistics.mean(times) if times else 0.0
 
     @property
+    def mean_attempts(self) -> float:
+        counts = [d.attempts for d in self.documents if d.error is None]
+        return statistics.mean(counts) if counts else 0.0
+
+    @property
     def failures(self) -> int:
         return sum(1 for d in self.documents if d.error is not None)
+
+    @property
+    def passes_gate(self) -> bool:
+        return (
+            self.field_accuracy >= FIELD_ACCURACY_TARGET
+            and self.document_accuracy >= 1.0
+        )
+
+    def accuracy_by_field(self) -> dict[str, tuple[int, int]]:
+        """Aciertos por nombre de campo.
+
+        La propuesta fija el umbral sobre los **campos clave**, no sobre el
+        promedio de todo lo que se extrae: mezclar `nombre_producto` con campos
+        accesorios en un solo número esconde justamente el dato que hay que
+        mirar.
+        """
+        tally: dict[str, list[int]] = {}
+        for document in self.documents:
+            for name, correct in document.per_field.items():
+                entry = tally.setdefault(name, [0, 0])
+                entry[0] += int(correct)
+                entry[1] += 1
+
+        return {name: (hits, total) for name, (hits, total) in tally.items()}
 
 
 def load_ground_truth(dataset: Path) -> dict:
@@ -99,23 +138,33 @@ def load_ground_truth(dataset: Path) -> dict:
     if not path.exists():
         raise SystemExit(
             f"No se encontró {path}.\n"
-            f"Colocá las imágenes reales en {dataset}/ junto a un {GROUND_TRUTH_FILE} "
-            f"(ver bench/README.md para el formato)."
+            f"Colocá las imágenes en {dataset}/ junto a un {GROUND_TRUTH_FILE} "
+            f"(ver el README para el formato)."
         )
 
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def score_document(result: OCRResult, expected: dict) -> tuple[int, int]:
-    """Compara el resultado contra el ground truth. Devuelve (aciertos, total)."""
+def score_document(
+    result: OCRResult, expected: dict
+) -> tuple[int, int, list[str], dict[str, bool]]:
+    """Compara contra el ground truth. Devuelve (aciertos, total, fallos, por campo)."""
     correct = 0
     total = 0
+    missed: list[str] = []
+    per_field: dict[str, bool] = {}
 
     for name, value in expected.get("fields", {}).items():
         total += 1
         extracted = result.fields.get(name)
-        if extracted is not None and _matches(extracted.value, value):
+        hit = extracted is not None and _matches(extracted.value, value)
+        per_field[name] = hit
+
+        if hit:
             correct += 1
+        else:
+            got = extracted.value if extracted else None
+            missed.append(f"{name}: esperaba '{value}', obtuvo '{got}'")
 
     expected_items = expected.get("items", [])
     if expected_items:
@@ -124,19 +173,23 @@ def score_document(result: OCRResult, expected: dict) -> tuple[int, int]:
         }
         for item in expected_items:
             total += 1
-            name = item["nombre_producto"]
             match = next(
                 (
                     quantity
                     for extracted_name, quantity in extracted_items.items()
-                    if _matches(extracted_name, name)
+                    if _matches(extracted_name, item["nombre_producto"])
                 ),
                 None,
             )
-            if match is not None and match == item.get("cantidad"):
-                correct += 1
+            hit = match is not None and match == item.get("cantidad")
+            per_field["items"] = per_field.get("items", True) and hit
 
-    return correct, total
+            if hit:
+                correct += 1
+            else:
+                missed.append(f"ítem '{item['nombre_producto']}' no reconocido")
+
+    return correct, total, missed, per_field
 
 
 def _matches(extracted, expected) -> bool:
@@ -145,23 +198,15 @@ def _matches(extracted, expected) -> bool:
         return False
 
     if isinstance(expected, str) and isinstance(extracted, str):
-        from rapidfuzz import fuzz
-
-        from app.parsers.text import fold
-
-        # Los nombres de producto se comparan con similitud: el OCR puede
-        # equivocarse en un carácter sin que el campo deje de ser correcto.
-        return fuzz.ratio(fold(extracted), fold(expected)) >= 90
+        # El nombre y la marca se comparan por similitud y también por inclusión:
+        # el motor suele leer el campo correcto acompañado de una palabra de más.
+        left, right = fold(extracted), fold(expected)
+        return fuzz.ratio(left, right) >= NAME_SIMILARITY or right in left
 
     return extracted == expected
 
 
-def run_engine(
-    engine_name: str,
-    dataset: Path,
-    ground_truth: dict,
-    config: PreprocessConfig,
-) -> EngineReport:
+def run_engine(engine_name: str, dataset: Path, ground_truth: dict) -> EngineReport:
     report = EngineReport(engine=engine_name)
 
     factory.reset_cache()
@@ -171,35 +216,32 @@ def run_engine(
         print(f"  ! motor '{engine_name}' no disponible: se omite")
         return report
 
-    tracemalloc.start()
-
     for filename, expected in sorted(ground_truth.items()):
         path = dataset / filename
-        score = DocumentScore(name=filename, doc_type=expected.get("doc_type", "product_label"))
+        score = DocumentScore(
+            name=filename, doc_type=expected.get("doc_type", "product_label")
+        )
 
         if not path.exists():
             score.error = "imagen faltante"
             report.documents.append(score)
             continue
 
-        doc_type = DocType(score.doc_type)
-
         try:
             started = time.perf_counter()
-
-            image = image_loader.decode(path.read_bytes())
-            processed = preprocess.run(image, config)
-            output = engine.run(
-                processed,
-                lang=settings.OCR_LANG,
-                layout=ocr_service.layout_for(doc_type),
+            result = ocr_service.process_sync(
+                path.read_bytes(), DocType(score.doc_type), engine_name=engine_name
             )
-            text = postprocess.clean(output.text)
-            result = ocr_service.build_result(output, text, doc_type)
-
             score.elapsed_ms = (time.perf_counter() - started) * 1000
-            score.correct_fields, score.total_fields = score_document(result, expected)
+            (
+                score.correct_fields,
+                score.total_fields,
+                score.missed,
+                score.per_field,
+            ) = score_document(result, expected)
             score.document_confidence = result.document_confidence
+            score.attempts = result.attempts
+            score.rotation = result.rotation
 
         except Exception as exc:  # el benchmark no debe abortar por un documento
             score.error = str(exc)
@@ -207,61 +249,68 @@ def run_engine(
         report.documents.append(score)
         _print_document(score)
 
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    report.peak_memory_mb = peak / (1024 * 1024)
-
     return report
 
 
 def _print_document(score: DocumentScore) -> None:
     if score.error:
-        print(f"  {score.name:<32} ERROR: {score.error}")
+        print(f"  {score.name:<28} ERROR: {score.error[:80]}")
         return
 
     print(
-        f"  {score.name:<32} campos {score.correct_fields}/{score.total_fields} "
+        f"  {score.name:<28} campos {score.correct_fields}/{score.total_fields} "
         f"({score.field_accuracy:>5.1%})  conf {score.document_confidence:.2f}  "
-        f"{score.elapsed_ms:>7.0f} ms"
+        f"rot {score.rotation:>3}  {score.attempts} int  {score.elapsed_ms:>7.0f} ms"
     )
+    for miss in score.missed:
+        print(f"      · {miss}")
 
 
 def print_summary(reports: list[EngineReport]) -> None:
-    field_threshold = 0.85
     doc_threshold = settings.DOCUMENT_CONFIDENCE_THRESHOLD
 
-    print("\n" + "=" * 88)
+    print("\n" + "=" * 92)
     print("COMPARATIVA DE MOTORES OCR")
-    print("=" * 88)
+    print("=" * 92)
     print(
-        f"{'Motor':<24}{'Campos':>10}{'Docs >=70%':>12}"
-        f"{'Latencia':>12}{'Memoria':>11}{'Fallos':>9}{'Gate':>8}"
+        f"{'Motor':<22}{'Campos':>10}{'Docs >=70%':>13}"
+        f"{'Latencia':>13}{'Intentos':>11}{'Fallos':>9}{'Gate':>8}"
     )
-    print("-" * 88)
+    print("-" * 92)
 
     for report in reports:
         if not report.documents:
-            print(f"{report.engine:<24}{'(no disponible)':>50}")
+            print(f"{report.engine:<22}{'(no disponible)':>50}")
             continue
 
-        passes = report.field_accuracy >= field_threshold and report.document_accuracy >= 1.0
-
         print(
-            f"{report.engine:<24}"
+            f"{report.engine:<22}"
             f"{report.field_accuracy:>9.1%} "
-            f"{report.document_accuracy:>11.1%} "
+            f"{report.document_accuracy:>12.1%} "
             f"{report.mean_latency_ms:>10.0f} ms"
-            f"{report.peak_memory_mb:>9.1f} MB"
+            f"{report.mean_attempts:>11.1f}"
             f"{report.failures:>9}"
-            f"{'  OK' if passes else '  NO':>8}"
+            f"{'  OK' if report.passes_gate else '  NO':>8}"
         )
 
-    print("-" * 88)
+    print("-" * 92)
     print(
-        f"Criterios de la propuesta: precision de campos clave >= {field_threshold:.0%} | "
-        f"confianza por documento >= {doc_threshold:.0%}"
+        f"Criterios de la propuesta: precision de campos clave >= "
+        f"{FIELD_ACCURACY_TARGET:.0%} | confianza por documento >= {doc_threshold:.0%}"
     )
-    print("=" * 88)
+    print("=" * 92)
+
+    print("\nDETALLE POR CAMPO")
+    print("-" * 92)
+    for report in reports:
+        if not report.documents:
+            continue
+        detail = "  ".join(
+            f"{name}: {hits}/{total} ({hits / total:.0%})"
+            for name, (hits, total) in sorted(report.accuracy_by_field().items())
+        )
+        print(f"{report.engine:<22}{detail}")
+    print("=" * 92)
 
 
 def main() -> int:
@@ -273,32 +322,20 @@ def main() -> int:
         default=list(CANDIDATE_ENGINES),
         help=f"motores a evaluar (default: {' '.join(CANDIDATE_ENGINES)})",
     )
-    parser.add_argument(
-        "--no-preprocess",
-        action="store_true",
-        help="desactiva el preprocesamiento OpenCV, para medir su aporte real",
-    )
     parser.add_argument("--json", type=Path, help="guarda el reporte crudo en un archivo JSON")
     args = parser.parse_args()
 
     ground_truth = load_ground_truth(args.dataset)
 
-    config = (
-        PreprocessConfig(
-            grayscale=False, upscale=False, denoise=False, threshold=False, deskew=False
-        )
-        if args.no_preprocess
-        else PreprocessConfig.from_settings()
-    )
-
     print(f"Dataset: {args.dataset} ({len(ground_truth)} documentos)")
-    print(f"Preprocesamiento: {'desactivado' if args.no_preprocess else 'activado'}\n")
+    print(f"Tesseract: {settings.TESSERACT_SERVICE_URL}")
+    print(f"EasyOCR:   {settings.EASYOCR_SERVICE_URL}\n")
 
     reports = []
     for engine_name in args.engines:
         print(f"> {engine_name}")
         try:
-            reports.append(run_engine(engine_name, args.dataset, ground_truth, config))
+            reports.append(run_engine(engine_name, args.dataset, ground_truth))
         except ValueError as exc:
             print(f"  ! {exc}")
 
@@ -314,7 +351,7 @@ def main() -> int:
                         "field_accuracy": r.field_accuracy,
                         "document_accuracy": r.document_accuracy,
                         "mean_latency_ms": r.mean_latency_ms,
-                        "peak_memory_mb": r.peak_memory_mb,
+                        "mean_attempts": r.mean_attempts,
                         "documents": [vars(d) for d in r.documents],
                     }
                     for r in reports
