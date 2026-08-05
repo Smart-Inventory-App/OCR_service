@@ -1,0 +1,68 @@
+{
+  "etiqueta_leche.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "LECHE ENTERA 1L",
+      "fecha_vencimiento": "2027-08-15"
+    }
+  },
+  "etiqueta_yogur.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "YOGUR FIRME FRUTILLA",
+      "fecha_vencimiento": "2026-12-01"
+    }
+  },
+  "etiqueta_arroz.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "ARROZ LARGO FINO 1KG",
+      "fecha_vencimiento": "2028-03-20"
+    }
+  },
+  "etiqueta_aceite_inclinada.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "ACEITE DE GIRASOL 900ML",
+      "fecha_vencimiento": "2027-09-30"
+    }
+  },
+  "ticket_super.jpg": {
+    "doc_type": "receipt",
+    "fields": {
+      "fecha_compra": "2026-07-20",
+      "total": 5240.5
+    },
+    "items": [
+      {
+        "nombre_producto": "Leche Entera 1L",
+        "cantidad": 2
+      },
+      {
+        "nombre_producto": "Pan Lactal",
+        "cantidad": 1
+      },
+      {
+        "nombre_producto": "Yogur Frutilla",
+        "cantidad": 3
+      }
+    ]
+  },
+  "ticket_almacen.jpg": {
+    "doc_type": "receipt",
+    "fields": {
+      "fecha_compra": "2026-07-18",
+      "total": 5600.0
+    },
+    "items": [
+      {
+        "nombre_producto": "Aceite Girasol 900ml",
+        "cantidad": 1
+      },
+      {
+        "nombre_producto": "Arroz Largo Fino",
+        "cantidad": 2
+      }
+    ]
+  }
+}
