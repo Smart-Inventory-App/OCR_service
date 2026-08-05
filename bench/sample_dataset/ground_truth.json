@@ -2,29 +2,47 @@
   "etiqueta_leche.jpg": {
     "doc_type": "product_label",
     "fields": {
-      "nombre_producto": "LECHE ENTERA 1L",
-      "fecha_vencimiento": "2027-08-15"
+      "nombre_producto": "LECHE ENTERA",
+      "marca": "La Serenisima"
     }
   },
   "etiqueta_yogur.jpg": {
     "doc_type": "product_label",
     "fields": {
       "nombre_producto": "YOGUR FIRME FRUTILLA",
-      "fecha_vencimiento": "2026-12-01"
+      "marca": "Yogurisimo"
     }
   },
   "etiqueta_arroz.jpg": {
     "doc_type": "product_label",
     "fields": {
-      "nombre_producto": "ARROZ LARGO FINO 1KG",
-      "fecha_vencimiento": "2028-03-20"
+      "nombre_producto": "ARROZ LARGO FINO",
+      "marca": "Gallo"
     }
   },
   "etiqueta_aceite_inclinada.jpg": {
     "doc_type": "product_label",
     "fields": {
-      "nombre_producto": "ACEITE DE GIRASOL 900ML",
-      "fecha_vencimiento": "2027-09-30"
+      "nombre_producto": "ACEITE DE GIRASOL",
+      "marca": "Natura"
+    }
+  },
+  "vencimiento_leche.jpg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-08-15"
+    }
+  },
+  "vencimiento_yogur_girado.jpg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2026-12-01"
+    }
+  },
+  "vencimiento_arroz_sello.jpg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2028-03-20"
     }
   },
   "ticket_super.jpg": {

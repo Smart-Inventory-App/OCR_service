@@ -1,0 +1,26 @@
+{
+  "coffee_1.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-10-24"
+    }
+  },
+  "coffee_2.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-01-05"
+    }
+  },
+  "flour.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2026-11-15"
+    }
+  },
+  "milk.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-02-27"
+    }
+  }
+}
