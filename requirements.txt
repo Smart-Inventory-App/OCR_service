@@ -1,0 +1,22 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-dotenv
+python-jose[cryptography]      # validación JWT (igual que auth/storage)
+httpx                          # descarga de imágenes + comunicación entre servicios
+python-multipart               # subida binaria (POST /ocr/scan)
+opencv-python-headless         # preprocesamiento (headless = sin GUI, ideal para Docker)
+numpy
+Pillow
+pytesseract                    # motor Tesseract
+redis                          # cola de trabajos + caché de resultados
+python-dateutil                # normalización de fechas (vencimiento/compra)
+rapidfuzz                      # normalización de nombres contra catálogo
+pytest
+pytest-asyncio
+pytest-cov
+fakeredis                      # Redis en memoria para los tests
+# --- Evaluación comparativa (NO en el deploy del MVP, sólo en bench/) ---
+# easyocr
+# paddleocr
+# paddlepaddle

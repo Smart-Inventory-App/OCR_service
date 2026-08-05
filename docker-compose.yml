@@ -1,0 +1,57 @@
+services:
+
+  ocr:
+    build: .
+    container_name: tpp_ocr
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    environment:
+      # Dentro de tpp-net los hosts son los nombres de servicio, no localhost.
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_SERVICE_URL: http://tpp_storage_service:8000
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tpp-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/ocr/livez"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build: .
+    container_name: tpp_ocr_worker
+    command: python -m app.worker
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_SERVICE_URL: http://tpp_storage_service:8000
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tpp-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tpp_ocr_redis
+    networks:
+      - tpp-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  tpp-net:
+    external: true
+    name: tpp-net

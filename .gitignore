@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.venv/
+venv/
+env/
+
+.env
+.env.local
+
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Salidas del benchmark (los datasets reales no se versionan)
+bench/dataset/*
+!bench/dataset/.gitkeep
+!bench/dataset/ground_truth.json
+bench/results/
+
+.DS_Store
+.idea/
+.vscode/
