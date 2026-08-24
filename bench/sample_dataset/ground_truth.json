@@ -1,0 +1,86 @@
+{
+  "etiqueta_leche.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "LECHE ENTERA",
+      "marca": "La Serenisima"
+    }
+  },
+  "etiqueta_yogur.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "YOGUR FIRME FRUTILLA",
+      "marca": "Yogurisimo"
+    }
+  },
+  "etiqueta_arroz.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "ARROZ LARGO FINO",
+      "marca": "Gallo"
+    }
+  },
+  "etiqueta_aceite_inclinada.jpg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "ACEITE DE GIRASOL",
+      "marca": "Natura"
+    }
+  },
+  "vencimiento_leche.jpg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-08-15"
+    }
+  },
+  "vencimiento_yogur_girado.jpg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2026-12-01"
+    }
+  },
+  "vencimiento_arroz_sello.jpg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2028-03-20"
+    }
+  },
+  "ticket_super.jpg": {
+    "doc_type": "receipt",
+    "fields": {
+      "fecha_compra": "2026-07-20",
+      "total": 5240.5
+    },
+    "items": [
+      {
+        "nombre_producto": "Leche Entera 1L",
+        "cantidad": 2
+      },
+      {
+        "nombre_producto": "Pan Lactal",
+        "cantidad": 1
+      },
+      {
+        "nombre_producto": "Yogur Frutilla",
+        "cantidad": 3
+      }
+    ]
+  },
+  "ticket_almacen.jpg": {
+    "doc_type": "receipt",
+    "fields": {
+      "fecha_compra": "2026-07-18",
+      "total": 5600.0
+    },
+    "items": [
+      {
+        "nombre_producto": "Aceite Girasol 900ml",
+        "cantidad": 1
+      },
+      {
+        "nombre_producto": "Arroz Largo Fino",
+        "cantidad": 2
+      }
+    ]
+  }
+}

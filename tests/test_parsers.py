@@ -1,0 +1,484 @@
+"""Parsers de etiqueta y ticket, y cálculo de confianza."""
+
+from datetime import date
+
+import pytest
+
+from app.core.config import settings
+from app.parsers import expiry, product_label, receipt, scoring
+from app.schemas.ocr import DocType, ExtractedField
+from app.services import ocr_service
+from tests.conftest import make_output
+
+TODAY = date(2026, 7, 29)
+
+
+# ---------------------------------------------------------------------------
+# Caso A — etiqueta de producto: nombre, marca y detalles
+# ---------------------------------------------------------------------------
+
+def test_label_extracts_name_brand_and_details():
+    output = make_output(
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], heights=[60, 30, 18]
+    )
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "LECHE ENTERA"
+    assert fields["marca"].value == "La Serenisima"
+    assert "1 litro" in fields["detalles"].value
+
+
+def test_label_name_is_the_category_not_the_biggest_line():
+    """La tipografía más grande de un envase es la marca, no el producto.
+
+    Es la regresión de la heurística anterior: `PUREZA` está impreso mucho más
+    grande que `HARINA`, y el nombre del producto es `HARINA`.
+    """
+    output = make_output(["HARINA", "PUREZA", "1 kg"], heights=[34, 80, 16])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "HARINA"
+    assert fields["marca"].value == "PUREZA"
+
+
+def test_label_merges_a_name_split_across_lines():
+    """`Leche` y `Entera` en dos renglones son un solo nombre."""
+    output = make_output(["Leche", "Entera", "1 litro"], heights=[40, 40, 16])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Leche Entera"
+
+
+def test_label_recovers_a_split_first_letter():
+    """El motor parte la versalita inicial: `C AFÉ` sigue siendo la categoría."""
+    output = make_output(["LaVirginia", "C AFE INSTANTANEO", "en sobres"], heights=[70, 34, 18])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "C AFE INSTANTANEO"
+    assert fields["marca"].value == "LaVirginia"
+
+
+def test_label_does_not_extract_expiry_date():
+    """El vencimiento tiene su propio tipo de documento y su propia foto."""
+    output = make_output(["LECHE ENTERA", "VTO 15/08/2027"], heights=[40, 20])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert "fecha_vencimiento" not in fields
+
+
+def test_label_ignores_noise_lines_as_name():
+    output = make_output(["VTO 15/08/2027", "LOTE 99321", "Arroz Largo Fino"], heights=[50, 50, 30])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Arroz Largo Fino"
+
+
+def test_label_low_engine_confidence_propagates_to_fields():
+    clear = make_output(["Marca Uno", "Leche Entera"], confidence=0.98, heights=[50, 30])
+    blurry = make_output(["Marca Uno", "Leche Entera"], confidence=0.55, heights=[50, 30])
+
+    clear_fields = product_label.parse(clear, clear.text, TODAY)
+    blurry_fields = product_label.parse(blurry, blurry.text, TODAY)
+
+    assert blurry_fields["nombre_producto"].confidence < clear_fields["nombre_producto"].confidence
+
+
+@pytest.mark.parametrize("garbage", ["( E Y e L", "AR es", "*/ -- ~~", "1 2 3 4 5"])
+def test_label_rejects_ocr_garbage_as_name(garbage):
+    """Ruido de una lectura fallida no debe ofrecerse como nombre de producto."""
+    output = make_output([garbage], heights=[40])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value is None
+
+
+def test_label_rejects_a_name_read_with_low_confidence():
+    """Un valor sin sentido es peor que un campo vacío: vacío pide revisión."""
+    output = make_output(["AU RARA"], confidence=0.2, heights=[40])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value is None
+
+
+def test_label_brand_must_be_typographically_prominent():
+    """La letra chica legal nunca es la marca, aunque sea lo único que quedó."""
+    output = make_output(["Leche Entera", "do Nero"], confidence=0.9, heights=[60, 14])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Leche Entera"
+    assert fields["marca"].value is None
+
+
+def test_label_accepts_real_name_over_garbage():
+    output = make_output(["( E Y e L", "Leche Entera"], heights=[50, 30])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Leche Entera"
+
+
+def test_label_empty_output_returns_empty_fields():
+    output = make_output([])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value is None
+    assert fields["marca"].value is None
+    assert fields["detalles"].value is None
+
+
+# ---------------------------------------------------------------------------
+# Caso B — sello de fecha de vencimiento
+# ---------------------------------------------------------------------------
+
+def test_expiry_extracts_the_announced_date():
+    output = make_output(["CONSUMIR PREFERENTEMENTE ANTES DE:", "24/10/2027"])
+
+    fields = expiry.parse(output, output.text, TODAY)
+
+    assert fields["fecha_vencimiento"].value == "2027-10-24"
+
+
+def test_expiry_ignores_the_production_date():
+    """`ENV.: 05/01/26  VTO.: 05/01/27` — la de envasado no es el vencimiento."""
+    output = make_output(["ENV.: 05/01/26", "VTO.: 05/01/27", "L:2601 B 09:15"])
+
+    fields = expiry.parse(output, output.text, TODAY)
+
+    assert fields["fecha_vencimiento"].value == "2027-01-05"
+
+
+def test_expiry_without_a_date_reports_zero_confidence():
+    output = make_output(["LOTE A2291", "B 09:15"])
+
+    fields = expiry.parse(output, output.text, TODAY)
+
+    assert fields["fecha_vencimiento"].value is None
+    assert fields["fecha_vencimiento"].confidence == 0.0
+
+
+def test_expiry_past_date_is_penalized():
+    """Una fecha ya vencida suele ser la de elaboración: baja la confianza."""
+    past = make_output(["VTO 01/01/2025"])
+    future = make_output(["VTO 01/01/2028"])
+
+    past_conf = expiry.parse(past, past.text, TODAY)["fecha_vencimiento"].confidence
+    future_conf = expiry.parse(future, future.text, TODAY)["fecha_vencimiento"].confidence
+
+    assert past_conf < future_conf
+
+
+def test_expiry_without_keyword_is_less_confident():
+    keyed = make_output(["VTO 15/08/2027"])
+    loose = make_output(["15/08/2027"])
+
+    keyed_conf = expiry.parse(keyed, keyed.text, TODAY)["fecha_vencimiento"].confidence
+    loose_conf = expiry.parse(loose, loose.text, TODAY)["fecha_vencimiento"].confidence
+
+    assert loose_conf < keyed_conf
+
+
+def test_expiry_repaired_month_is_less_confident():
+    """`24 GCT 27` se recupera, pero es una lectura reparada y se nota."""
+    clean = make_output(["VTO 24 OCT 2027"])
+    repaired = make_output(["VTO 24 GCT 2027"])
+
+    clean_fields = expiry.parse(clean, clean.text, TODAY)
+    repaired_fields = expiry.parse(repaired, repaired.text, TODAY)
+
+    assert repaired_fields["fecha_vencimiento"].value == "2027-10-24"
+    assert (
+        repaired_fields["fecha_vencimiento"].confidence
+        < clean_fields["fecha_vencimiento"].confidence
+    )
+
+
+# ---------------------------------------------------------------------------
+# Caso B — ticket / remito / factura
+# ---------------------------------------------------------------------------
+
+RECEIPT_LINES = [
+    "SUPERMERCADO LA ESQUINA",
+    "CUIT 30-12345678-9",
+    "FECHA 20/07/2026",
+    "2 x Leche Entera 1L 2.400,00",
+    "1 x Pan Lactal 1.850,50",
+    "3 Yogur Frutilla 990,00",
+    "TOTAL 5.240,50",
+]
+
+
+def test_receipt_extracts_document_fields():
+    output = make_output(RECEIPT_LINES)
+
+    fields, _ = receipt.parse(output, output.text, TODAY)
+
+    assert fields["fecha_compra"].value == "2026-07-20"
+    assert fields["total"].value == 5240.50
+    assert fields["comercio"].value == "SUPERMERCADO LA ESQUINA"
+
+
+def test_receipt_extracts_items_with_quantities():
+    output = make_output(RECEIPT_LINES)
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    extracted = {item.nombre_producto.value: item.cantidad.value for item in items}
+
+    assert extracted == {
+        "Leche Entera 1L": 2,
+        "Pan Lactal": 1,
+        "Yogur Frutilla": 3,
+    }
+
+
+def test_receipt_skips_header_and_footer_lines():
+    output = make_output(RECEIPT_LINES)
+
+    _, items = receipt.parse(output, output.text, TODAY)
+    names = [item.nombre_producto.value for item in items]
+
+    assert not any("TOTAL" in name or "CUIT" in name for name in names)
+    assert "SUPERMERCADO LA ESQUINA" not in names
+
+
+def test_receipt_quantity_suffix_format():
+    output = make_output(["KIOSCO", "FECHA 20/07/2026", "Alfajor Triple x 4 1.200,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "Alfajor Triple"
+    assert items[0].cantidad.value == 4
+
+
+def test_receipt_quantity_glued_to_name():
+    """Tesseract suele leer «2 x Leche» como «2xLeche», sin espacios."""
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "2xLeche Entera 1L 2.400,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "Leche Entera 1L"
+    assert items[0].cantidad.value == 2
+
+
+def test_receipt_unit_marker_does_not_split_a_word():
+    """«2 unidades Leche» no debe partirse en «idades Leche»."""
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "2 unidades Leche 2.400,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "unidades Leche"
+    assert items[0].cantidad.value == 2
+
+
+def test_receipt_name_keeps_trailing_x():
+    """Recortar la «x» rompería productos que se llaman «Max» o «Box»."""
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "1 x Jugo Max 1.200,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].nombre_producto.value == "Jugo Max"
+
+
+def test_receipt_implicit_quantity_is_one_with_lower_confidence():
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "Aceite Girasol 900ml 3.100,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items[0].cantidad.value == 1
+    assert items[0].cantidad.confidence < items[0].nombre_producto.confidence
+
+
+def test_receipt_total_prefers_total_over_subtotal():
+    output = make_output(
+        ["ALMACEN", "FECHA 20/07/2026", "Leche 1L 2.400,00", "SUBTOTAL 2.400,00", "TOTAL 2.900,00"]
+    )
+
+    fields, _ = receipt.parse(output, output.text, TODAY)
+
+    assert fields["total"].value == 2900.00
+
+
+def test_receipt_without_items_returns_empty_list():
+    output = make_output(["SUPERMERCADO", "FECHA 20/07/2026", "TOTAL 0,00"])
+
+    _, items = receipt.parse(output, output.text, TODAY)
+
+    assert items == []
+
+
+def test_receipt_amount_without_thousands_separator():
+    output = make_output(["ALMACEN", "FECHA 20/07/2026", "TOTAL 999,90"])
+
+    fields, _ = receipt.parse(output, output.text, TODAY)
+
+    assert fields["total"].value == 999.90
+
+
+def test_receipt_future_purchase_date_is_penalized():
+    future = make_output(["ALMACEN", "FECHA 20/07/2030", "TOTAL 100,00"])
+    past = make_output(["ALMACEN", "FECHA 20/07/2026", "TOTAL 100,00"])
+
+    future_conf = receipt.parse(future, future.text, TODAY)[0]["fecha_compra"].confidence
+    past_conf = receipt.parse(past, past.text, TODAY)[0]["fecha_compra"].confidence
+
+    assert future_conf < past_conf
+
+
+# ---------------------------------------------------------------------------
+# Scoring y umbrales de la propuesta
+# ---------------------------------------------------------------------------
+
+def test_combine_multiplies_engine_and_parser_confidence():
+    assert scoring.combine(0.9, 0.5) == 0.45
+
+
+def test_combine_clamps_out_of_range_values():
+    assert scoring.combine(1.5, 1.0) == 1.0
+    assert scoring.combine(-0.2, 1.0) == 0.0
+
+
+def test_field_without_value_has_zero_confidence():
+    assert scoring.field(None, 0.99, 0.99).confidence == 0.0
+    assert scoring.field("   ", 0.99, 0.99).confidence == 0.0
+
+
+def test_document_confidence_is_weighted_average():
+    fields = {
+        "nombre_producto": ExtractedField(value="Leche", confidence=1.0),   # peso 1.0
+        "fecha_vencimiento": ExtractedField(value="2027-01-01", confidence=0.0),  # peso 1.0
+        "comercio": ExtractedField(value="X", confidence=1.0),              # peso 0.5
+    }
+
+    # (1.0 + 0.0 + 0.5) / 2.5 = 0.6
+    assert scoring.document_confidence(fields) == 0.6
+
+
+def test_document_confidence_of_empty_fields_is_zero():
+    assert scoring.document_confidence({}) == 0.0
+
+
+KEY_FIELDS_BOTH = ("nombre_producto", "fecha_vencimiento")
+
+
+def test_needs_review_when_a_key_field_is_below_threshold():
+    fields = {
+        "nombre_producto": ExtractedField(value="Leche", confidence=0.99),
+        "fecha_vencimiento": ExtractedField(value="2027-01-01", confidence=0.60),
+    }
+
+    assert scoring.needs_review(fields, KEY_FIELDS_BOTH) is True
+
+
+def test_no_review_needed_when_all_key_fields_are_confident():
+    fields = {
+        "nombre_producto": ExtractedField(value="Leche", confidence=0.99),
+        "fecha_vencimiento": ExtractedField(value="2027-01-01", confidence=0.90),
+    }
+
+    assert scoring.needs_review(fields, KEY_FIELDS_BOTH) is False
+
+
+def test_missing_key_field_forces_review():
+    fields = {"nombre_producto": ExtractedField(value="Leche", confidence=0.99)}
+
+    assert scoring.needs_review(fields, KEY_FIELDS_BOTH) is True
+
+
+def test_thresholds_match_the_proposal():
+    assert settings.FIELD_CONFIDENCE_THRESHOLD == 0.85
+    assert settings.DOCUMENT_CONFIDENCE_THRESHOLD == 0.70
+
+
+# ---------------------------------------------------------------------------
+# build_result — integración parser + scoring
+# ---------------------------------------------------------------------------
+
+def test_build_result_for_clean_label_does_not_need_review():
+    output = make_output(
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], confidence=0.99, heights=[60, 30, 16]
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
+
+    assert result.needs_review is False
+    assert result.document_confidence >= settings.DOCUMENT_CONFIDENCE_THRESHOLD
+    assert result.engine == "fake"
+
+
+def test_build_result_for_blurry_label_needs_review():
+    output = make_output(
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], confidence=0.45, heights=[60, 30, 16]
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
+
+    assert result.needs_review is True
+
+
+def test_build_result_for_receipt_populates_items():
+    output = make_output(RECEIPT_LINES, confidence=0.99)
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, TODAY)
+
+    assert len(result.items) == 3
+    assert "fecha_compra" in result.fields
+
+
+def test_receipt_without_items_needs_review():
+    """Un comprobante sin ítems no sirve para cargar inventario sin confirmar."""
+    output = make_output(["SUPERMERCADO", "FECHA 20/07/2026", "TOTAL 0,00"], confidence=0.99)
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, TODAY)
+
+    assert result.items == []
+    assert result.needs_review is True
+
+
+def test_receipt_with_inferred_quantities_needs_review():
+    """Cantidad inferida (conf 0.6 < 0.85) obliga a revisión manual asistida."""
+    output = make_output(
+        ["ALMACEN", "FECHA 20/07/2026", "Aceite Girasol 3.100,00", "TOTAL 3.100,00"],
+        confidence=0.99,
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, TODAY)
+
+    assert result.items
+    assert result.needs_review is True
+
+
+def test_build_result_keeps_raw_text_for_audit():
+    output = make_output(["Leche Entera", "1 litro"], heights=[40, 20])
+
+    result = ocr_service.build_result(output, output.text, DocType.PRODUCT_LABEL, TODAY)
+
+    assert "Leche Entera" in result.raw_text
+
+
+def test_build_result_for_expiry_scores_only_the_date():
+    output = make_output(["VTO: 15/08/2027"], confidence=0.99)
+
+    result = ocr_service.build_result(output, output.text, DocType.EXPIRY_DATE, TODAY)
+
+    assert set(result.fields) == {"fecha_vencimiento"}
+    assert result.fields["fecha_vencimiento"].value == "2027-08-15"
+    assert result.needs_review is False
+
+
+def test_build_result_for_unreadable_stamp_needs_review():
+    output = make_output(["LOTE A2291", "B 09:15"], confidence=0.99)
+
+    result = ocr_service.build_result(output, output.text, DocType.EXPIRY_DATE, TODAY)
+
+    assert result.fields["fecha_vencimiento"].value is None
+    assert result.needs_review is True
