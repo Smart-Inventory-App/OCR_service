@@ -94,6 +94,32 @@ def test_retries_can_be_disabled(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# De dónde sale `supports_preprocessing`
+# ---------------------------------------------------------------------------
+
+def test_the_capability_is_taken_from_the_engine_service():
+    """Quién sabe si le sirve el preprocesamiento es el motor, no el coordinador.
+
+    El valor con el que se construye el `RemoteEngine` es sólo un default: si el
+    servicio declara otra cosa en `/engine/info`, manda el servicio.
+    """
+    class Declaring:
+        name = "declarante"
+        supports_preprocessing = True
+
+        def refresh_capabilities(self):
+            self.supports_preprocessing = False
+
+    assert ocr_service._supports_preprocessing(Declaring()) is False
+
+
+def test_an_engine_that_cannot_declare_keeps_its_default():
+    """Un doble de tests, o el híbrido, no tienen `/engine/info` que consultar."""
+    assert ocr_service._supports_preprocessing(FakeEngine([], supports_preprocessing=False)) is False
+    assert ocr_service._supports_preprocessing(FakeEngine([])) is True
+
+
+# ---------------------------------------------------------------------------
 # Ejecución del plan
 # ---------------------------------------------------------------------------
 

@@ -118,5 +118,15 @@ def _build(key: str) -> OCREngine:
 
 
 def reset_cache() -> None:
-    """Descarta los motores memoizados (usado en tests y en el benchmark)."""
+    """Descarta los motores memoizados y cierra sus conexiones.
+
+    La usan los tests, el benchmark (que reconstruye los motores entre corridas)
+    y el apagado del servicio: un `RemoteEngine` mantiene viva la conexión con su
+    motor, así que descartarlo sin cerrarla dejaría el socket colgado.
+    """
+    for engine in _cache.values():
+        close = getattr(engine, "close", None)
+        if close is not None:
+            close()
+
     _cache.clear()

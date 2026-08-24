@@ -42,9 +42,30 @@ class RemoteEngine:
         self.supports_preprocessing = supports_preprocessing
         self._info: dict | None = None
         self._info_calls = 0
+        self._http: httpx.Client | None = None
 
-    # ── Contrato OCREngine ────────────────────────────────────────────────────
+    # Cliente HTTP
+    def _client(self) -> httpx.Client:
+        """Cliente memoizado, para reusar la conexión con el motor.
 
+        Un escaneo de vencimiento encadena hasta ocho llamadas al mismo servicio.
+        Abriendo un cliente nuevo en cada una se pagaba un *handshake* TCP por
+        intento; con uno solo, la conexión queda viva entre intentos. El timeout
+        se pasa por petición porque no es el mismo para reconocer que para
+        preguntar si el motor está vivo.
+        """
+        if self._http is None:
+            self._http = httpx.Client(timeout=settings.HTTP_TIMEOUT_SECONDS)
+
+        return self._http
+
+    def close(self) -> None:
+        """Cierra la conexión con el motor. La llama el apagado del servicio."""
+        if self._http is not None:
+            self._http.close()
+            self._http = None
+
+    # Contrato OCREngine
     def run(
         self,
         content: bytes,
@@ -64,14 +85,14 @@ class RemoteEngine:
         }
 
         try:
-            with httpx.Client(timeout=settings.ENGINE_TIMEOUT_SECONDS) as client:
-                response = client.post(
-                    f"{self.base_url}/engine/run",
-                    files={"file": ("image.jpg", content, "image/jpeg")},
-                    data=payload,
-                    headers=self._headers(),
-                )
-                response.raise_for_status()
+            response = self._client().post(
+                f"{self.base_url}/engine/run",
+                files={"file": ("image.jpg", content, "image/jpeg")},
+                data=payload,
+                headers=self._headers(),
+                timeout=settings.ENGINE_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise EngineUnavailable(
                 f"El motor '{self.name}' respondió {exc.response.status_code}: "
@@ -86,8 +107,9 @@ class RemoteEngine:
 
     def is_available(self) -> bool:
         try:
-            with httpx.Client(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
-                response = client.get(f"{self.base_url}/engine/readyz", headers=self._headers())
+            response = self._client().get(
+                f"{self.base_url}/engine/readyz", headers=self._headers()
+            )
             # `degraded` (por ejemplo, falta el paquete de idioma) sigue siendo
             # utilizable: el motor cae a inglés y lo avisa.
             return response.status_code == 200 and response.json().get("status") != "error"
@@ -114,10 +136,11 @@ class RemoteEngine:
 
     def _fetch_info(self) -> dict:
         try:
-            with httpx.Client(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
-                response = client.get(f"{self.base_url}/engine/info", headers=self._headers())
-                response.raise_for_status()
-                return response.json()
+            response = self._client().get(
+                f"{self.base_url}/engine/info", headers=self._headers()
+            )
+            response.raise_for_status()
+            return response.json()
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning("No se pudo leer /engine/info de '%s': %s", self.name, exc)
             return {"engine": self.name, "version": "desconocida", "languages": []}

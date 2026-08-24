@@ -8,9 +8,8 @@ Verifican los dos criterios de aceptación:
 El conjunto de validación de este prototipo son documentos sintéticos con su
 ground truth: el motor se sustituye por un doble cuya confianza y cuyas líneas
 reproducen escenarios realistas. Es un *gate* de regresión sobre la extracción y
-el scoring, no una medición de precisión de los motores — eso lo mide
-`run_benchmark.py` sobre las fotos reales de `bench/sample_res_product/` y
-`bench/sample_res_product_expiredate/`, y sus resultados están en el README.
+el scoring, no una medición de precisión de los motores — para eso está
+`run_benchmark.py`, que corre sobre el dataset que se le indique.
 
 Los tres tipos de documento se cubren por separado, que es justamente el cambio
 que introdujo la división del escaneo: la etiqueta aporta nombre, marca y

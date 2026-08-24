@@ -10,6 +10,7 @@ import logging
 import signal
 
 from app.core.config import settings
+from app.engines import factory
 from app.schemas.ocr import DocType
 from app.services import image_loader, ocr_service, queue, storage_client
 
@@ -19,7 +20,6 @@ BLPOP_TIMEOUT_SECONDS = 5
 RETRY_DELAY_SECONDS = 5
 
 _shutdown = asyncio.Event()
-
 
 async def process_job(task: dict) -> None:
     """Procesa un job de la cola y persiste su resultado."""
@@ -80,6 +80,8 @@ async def run() -> None:
             await process_job(task)
 
     await queue.close()
+    # Cierra las conexiones abiertas hacia los servicios de motor.
+    factory.reset_cache()
     logger.info("Worker OCR detenido")
 
 

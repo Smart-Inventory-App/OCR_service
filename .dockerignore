@@ -1,0 +1,39 @@
+# Lo que NO debe entrar en la imagen.
+#
+# El `.env` es lo más importante de esta lista: `COPY . .` lo estaba metiendo en
+# una capa de la imagen, con el JWT_SECRET de desarrollo adentro. En Docker y en
+# Railway la configuración llega por variables de entorno, así que el archivo no
+# hace falta y no debe viajar.
+
+.env
+.env.local
+.env.*
+!.env.example
+
+.git
+.gitignore
+
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# El benchmark y los tests no se ejecutan dentro del contenedor de producción,
+# y `bench/` arrastra las imágenes del dataset sintético.
+bench/
+tests/
+pytest.ini
+
+docker-compose.yml
+README.md
+
+.DS_Store
+.idea/
+.vscode/

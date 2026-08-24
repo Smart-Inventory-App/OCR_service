@@ -80,7 +80,7 @@ Y una ganancia operativa: **el motor caro se enciende sólo cuando se lo usa**. 
 
 ### 3. Precisión sobre Fotos Reales de Producto
 
-El conjunto de trabajo son fotos de celular de productos reales, con fondo doméstico, iluminación despareja y envases brillantes y curvos (`bench/sample_res_product/` y `bench/sample_res_product_expiredate/`). Cinco cambios, todos medidos:
+El conjunto de trabajo son fotos de celular de productos reales, con fondo doméstico, iluminación despareja y envases brillantes y curvos. Es un conjunto propio y **no se versiona** (ver [Dataset Propio](#dataset-propio)). Cinco cambios, todos medidos:
 
 **a) Búsqueda de orientación.** Las cuatro fotos de vencimiento del conjunto llegan **giradas un cuarto de vuelta**: el dato está impreso en un canto del envase y no hay forma cómoda de fotografiarlo derecho. Ningún motor lee texto girado 90°. El coordinador prueba las cuatro orientaciones y conserva la que lee.
 
@@ -128,7 +128,7 @@ Y cuando sí se llama al respaldo, se le ahorra la búsqueda de orientación: se
 
 Todo lo que sigue se reproduce con `python -m bench.run_benchmark` (ver [Benchmark](#benchmark--evaluación-comparativa-de-motores)).
 
-### Fotos Reales de Etiqueta — `bench/sample_res_product/` (5 productos)
+### Fotos Reales de Etiqueta
 
 Fotos de celular con fondo doméstico e iluminación despareja: café instantáneo, café molido, harina, agua saborizada y leche.
 
@@ -150,7 +150,7 @@ Los tres casos que fallan y por qué:
 
 En los tres el servicio **no inventa un valor**: devuelve `null` y marca `needs_review`, que dispara la validación manual asistida. Es el comportamiento que la propuesta prevé para los casos que la automatización no cubre.
 
-### Fotos Reales del Sello de Vencimiento — `bench/sample_res_product_expiredate/` (4 productos)
+### Fotos Reales del Sello de Vencimiento
 
 Sellos impresos sobre el envase, **los cuatro girados un cuarto de vuelta** y tres de ellos en matriz de puntos.
 
@@ -595,7 +595,7 @@ curl http://localhost:8003/ocr/jobs/<job_id> -H "Authorization: Bearer $TOKEN"
 pytest
 ```
 
-**202 tests, 93 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
+**207 tests, 93 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
 
 | Archivo | Qué cubre |
 |---------|-----------|
@@ -621,11 +621,7 @@ La propuesta lo pide explícitamente:
 > recursos."
 
 ```bash
-python -m bench.run_benchmark --dataset bench/sample_res_product
-```
-
-```bash
-python -m bench.run_benchmark --dataset bench/sample_res_product_expiredate
+python -m bench.run_benchmark --dataset bench/dataset
 ```
 
 ```bash
@@ -656,7 +652,7 @@ hybrid                fecha_vencimiento: 4/4 (100%)
 
 ### Dataset Propio
 
-Las imágenes reales del proyecto no se versionan. Colocá las tuyas en `bench/dataset/` junto a un `ground_truth.json`:
+Las imágenes reales del proyecto **no se versionan**: `bench/dataset/` está en el `.gitignore` y llega vacío al repositorio. Colocá ahí las tuyas junto a un `ground_truth.json`:
 
 ```json
 {

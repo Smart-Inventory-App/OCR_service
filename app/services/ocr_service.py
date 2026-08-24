@@ -353,6 +353,21 @@ def _items_need_review(items: list[ReceiptItem], doc_type: DocType) -> bool:
 
 
 def _supports_preprocessing(engine) -> bool:
+    """Si al motor le sirve que el coordinador le varíe la cadena de filtros.
+
+    La respuesta la da el motor en `/engine/info`, no este servicio: es el único
+    que sabe cómo prepara su entrada. El valor con el que se construye el
+    `RemoteEngine` es sólo el default hasta que el servicio conteste, y la
+    consulta es barata porque `info()` está cacheada.
+
+    Un motor sin `refresh_capabilities` —el híbrido, o un doble de tests— se
+    queda con el atributo que declara, y si el motor no contesta se conserva el
+    default en vez de asumir nada.
+    """
+    refresh = getattr(engine, "refresh_capabilities", None)
+    if refresh is not None:
+        refresh()
+
     return bool(getattr(engine, "supports_preprocessing", True))
 
 

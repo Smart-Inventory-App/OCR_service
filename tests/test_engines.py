@@ -201,6 +201,49 @@ def test_remote_engine_takes_its_capabilities_from_the_service():
 
 
 @respx.mock
+def test_remote_engine_reuses_the_connection_between_attempts():
+    """Un escaneo de vencimiento son hasta ocho llamadas al mismo servicio."""
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(
+        return_value=httpx.Response(200, json=engine_response([WORD]))
+    )
+
+    engine = remote()
+    engine.run(IMAGE)
+    first = engine._client()
+    engine.run(IMAGE)
+
+    assert engine._client() is first
+
+
+@respx.mock
+def test_closing_the_engine_releases_the_connection():
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(
+        return_value=httpx.Response(200, json=engine_response([WORD]))
+    )
+
+    engine = remote()
+    engine.run(IMAGE)
+    client = engine._client()
+    engine.close()
+
+    assert client.is_closed
+    # Y vuelve a servir: cerrar no lo deja inutilizable.
+    engine.run(IMAGE)
+    assert not engine._client().is_closed
+
+
+@respx.mock
+def test_reset_cache_closes_the_engines_it_discards():
+    """Descartar un motor sin cerrarlo dejaría el socket colgado."""
+    engine = factory.build_engine("tesseract")
+    client = engine._client()
+
+    factory.reset_cache()
+
+    assert client.is_closed
+
+
+@respx.mock
 def test_remote_engine_info_is_cached():
     route = respx.get(f"{TESSERACT_URL}/engine/info").mock(
         return_value=httpx.Response(200, json={"engine": "tesseract", "version": "5.5.0"})

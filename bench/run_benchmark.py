@@ -12,9 +12,12 @@ decir con la misma estrategia de intentos que usa la App, y emite una tabla
 comparativa: precisión por campo, documentos que superan el umbral, latencia
 total y cuánto de esa latencia es el motor.
 
-    python -m bench.run_benchmark --dataset bench/sample_res_product
+    python -m bench.run_benchmark --dataset bench/dataset
     python -m bench.run_benchmark --dataset bench/sample_dataset --engines tesseract
-    python -m bench.run_benchmark --dataset bench/sample_res_product_expiredate
+
+`bench/sample_dataset/` es el conjunto sintético de control, versionado en el
+repositorio. `bench/dataset/` es el conjunto de trabajo: está vacío en el
+repositorio y es donde se colocan las imágenes propias (ver el README).
 
 Requiere que los servicios de motor estén levantados (`ocr_service_tesseract` y
 `ocr_service_easyocr`). El consumo de memoria ya no se mide desde acá: cada motor
@@ -325,9 +328,10 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="guarda el reporte crudo en un archivo JSON")
     args = parser.parse_args()
 
-    ground_truth = load_ground_truth(args.dataset)
+    dataset = args.dataset
+    ground_truth = load_ground_truth(dataset)
 
-    print(f"Dataset: {args.dataset} ({len(ground_truth)} documentos)")
+    print(f"Dataset: {dataset} ({len(ground_truth)} documentos)")
     print(f"Tesseract: {settings.TESSERACT_SERVICE_URL}")
     print(f"EasyOCR:   {settings.EASYOCR_SERVICE_URL}\n")
 
@@ -335,7 +339,7 @@ def main() -> int:
     for engine_name in args.engines:
         print(f"> {engine_name}")
         try:
-            reports.append(run_engine(engine_name, args.dataset, ground_truth))
+            reports.append(run_engine(engine_name, dataset, ground_truth))
         except ValueError as exc:
             print(f"  ! {exc}")
 

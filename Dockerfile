@@ -14,4 +14,7 @@ COPY . .
 
 EXPOSE 8003
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8003}"]
+# `HOST` y `PORT` salen del entorno para no tener que rearmar la imagen al
+# desplegar. En Railway `PORT` lo inyecta la plataforma; `HOST` sólo hay que
+# tocarlo si el servicio tiene que escuchar en IPv6 (`::`) para la red privada.
+CMD ["sh", "-c", "uvicorn app.main:app --host ${HOST:-0.0.0.0} --port ${PORT:-8003}"]

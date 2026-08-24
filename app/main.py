@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.engines import factory
 from app.routes.health import router as health_router
 from app.routes.ocr import router as ocr_router
 from app.routes.playground import router as playground_router
@@ -20,7 +21,8 @@ logging.basicConfig(
 async def lifespan(app: FastAPI):
     yield
     await queue.close()
-
+    # Cierra las conexiones abiertas hacia los servicios de motor.
+    factory.reset_cache()
 
 app = FastAPI(
     title="OCR Service — Smart Inventory",
