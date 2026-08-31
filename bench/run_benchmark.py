@@ -53,6 +53,22 @@ NAME_SIMILARITY = 90
 FIELD_ACCURACY_TARGET = 0.85
 """Criterio de la propuesta: precisión ≥ 85% en la extracción de campos clave."""
 
+# Cuáles son los campos **clave** de cada tipo de documento. La propuesta fija el
+# umbral del 85% sobre ellos —"nombre de producto, fecha de vencimiento y, en
+# caso de tickets, cantidad y fecha de compra"— y no sobre todo lo que se
+# extrae. `marca` y `detalles` enriquecen el alta pero no la bloquean, así que
+# promediarlos con los clave en un solo número esconde el dato que hay que
+# mirar: sobre las fotos del proyecto la diferencia entre uno y otro es la
+# diferencia entre pasar el criterio y no pasarlo.
+#
+# Se replican los `KEY_FIELDS` de cada parser en lugar de importarlos porque acá
+# hay que nombrar además los ítems del ticket, que no son un campo del documento.
+KEY_FIELDS_BY_DOC_TYPE: dict[str, tuple[str, ...]] = {
+    "product_label": ("nombre_producto",),
+    "expiry_date": ("fecha_vencimiento",),
+    "receipt": ("fecha_compra", "items"),
+}
+
 
 @dataclass
 class DocumentScore:
@@ -72,6 +88,13 @@ class DocumentScore:
     def field_accuracy(self) -> float:
         return self.correct_fields / self.total_fields if self.total_fields else 0.0
 
+    def key_field_tally(self) -> tuple[int, int]:
+        """Aciertos y total contando **sólo** los campos clave de este documento."""
+        key = KEY_FIELDS_BY_DOC_TYPE.get(self.doc_type, ())
+        scored = [self.per_field[name] for name in key if name in self.per_field]
+
+        return sum(scored), len(scored)
+
 
 @dataclass
 class EngineReport:
@@ -80,8 +103,17 @@ class EngineReport:
 
     @property
     def field_accuracy(self) -> float:
+        """Precisión sobre **todos** los campos del ground truth, clave o no."""
         correct = sum(d.correct_fields for d in self.documents)
         total = sum(d.total_fields for d in self.documents)
+        return correct / total if total else 0.0
+
+    @property
+    def key_field_accuracy(self) -> float:
+        """Precisión sobre los campos clave: **el criterio de la propuesta**."""
+        tallies = [d.key_field_tally() for d in self.documents]
+        correct = sum(hits for hits, _ in tallies)
+        total = sum(count for _, count in tallies)
         return correct / total if total else 0.0
 
     @property
@@ -113,8 +145,9 @@ class EngineReport:
 
     @property
     def passes_gate(self) -> bool:
+        """El umbral del 85% se mide sobre los campos **clave**, como la propuesta."""
         return (
-            self.field_accuracy >= FIELD_ACCURACY_TARGET
+            self.key_field_accuracy >= FIELD_ACCURACY_TARGET
             and self.document_accuracy >= 1.0
         )
 
@@ -276,19 +309,20 @@ def print_summary(reports: list[EngineReport]) -> None:
     print("COMPARATIVA DE MOTORES OCR")
     print("=" * 92)
     print(
-        f"{'Motor':<22}{'Campos':>10}{'Docs >=70%':>13}"
+        f"{'Motor':<20}{'Clave':>9}{'Todos':>9}{'Docs >=70%':>13}"
         f"{'Latencia':>13}{'Intentos':>11}{'Fallos':>9}{'Gate':>8}"
     )
     print("-" * 92)
 
     for report in reports:
         if not report.documents:
-            print(f"{report.engine:<22}{'(no disponible)':>50}")
+            print(f"{report.engine:<20}{'(no disponible)':>50}")
             continue
 
         print(
-            f"{report.engine:<22}"
-            f"{report.field_accuracy:>9.1%} "
+            f"{report.engine:<20}"
+            f"{report.key_field_accuracy:>8.1%} "
+            f"{report.field_accuracy:>8.1%} "
             f"{report.document_accuracy:>12.1%} "
             f"{report.mean_latency_ms:>10.0f} ms"
             f"{report.mean_attempts:>11.1f}"
@@ -298,9 +332,17 @@ def print_summary(reports: list[EngineReport]) -> None:
 
     print("-" * 92)
     print(
-        f"Criterios de la propuesta: precision de campos clave >= "
+        f"Criterios de la propuesta: precision de campos CLAVE >= "
         f"{FIELD_ACCURACY_TARGET:.0%} | confianza por documento >= {doc_threshold:.0%}"
     )
+    print(
+        "  Clave = "
+        + " | ".join(
+            f"{doc_type}: {', '.join(fields)}"
+            for doc_type, fields in KEY_FIELDS_BY_DOC_TYPE.items()
+        )
+    )
+    print("  Todos = incluye los accesorios (marca, detalles, total, comercio)")
     print("=" * 92)
 
     print("\nDETALLE POR CAMPO")
@@ -352,6 +394,7 @@ def main() -> int:
                 [
                     {
                         "engine": r.engine,
+                        "key_field_accuracy": r.key_field_accuracy,
                         "field_accuracy": r.field_accuracy,
                         "document_accuracy": r.document_accuracy,
                         "mean_latency_ms": r.mean_latency_ms,

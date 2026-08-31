@@ -117,6 +117,7 @@
           <option value="">Configurado por defecto</option>
           <option value="tesseract">Tesseract (rápido, liviano)</option>
           <option value="easyocr">EasyOCR (preciso, pesado)</option>
+          <option value="paddleocr">PaddleOCR (preciso, pesado)</option>
           <option value="hybrid">Híbrido (Tesseract + respaldo)</option>
         </select>
       </div>
@@ -273,7 +274,7 @@ async function loadEngines() {
     // El híbrido necesita al menos el motor principal; con el respaldo caído
     // degrada pero sigue funcionando.
     const usable = { tesseract: up.has("tesseract"), easyocr: up.has("easyocr"),
-                     hybrid: up.has("tesseract") };
+                     paddleocr: up.has("paddleocr"), hybrid: up.has("tesseract") };
 
     for (const option of $("engine").options) {
       if (!option.value) continue;
