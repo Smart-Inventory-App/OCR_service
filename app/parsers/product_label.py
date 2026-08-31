@@ -44,6 +44,12 @@ CATEGORIES = (
     "cerveza", "vino", "fernet", "aperitivo", "caldo", "sopa", "conserva",
     "snack", "papas fritas", "mani", "detergente", "jabon", "lavandina",
     "suavizante", "shampoo", "acondicionador", "papel higienico", "servilletas",
+    # Condimentos y especias. Faltaban enteros, y sin la categoría el nombre
+    # cae en la marca: sobre el perejil de Alicante el campo devolvía
+    # "Alicante Perejil" en vez de "Perejil deshidratado".
+    "perejil", "oregano", "albahaca", "comino", "pimienta", "pimenton",
+    "laurel", "romero", "tomillo", "ajo", "curry", "canela", "provenzal",
+    "chimichurri", "condimento", "condimentos", "especias", "nuez moscada",
 )
 
 # Calificativos: describen al producto pero no lo nombran ni son su marca.
@@ -55,6 +61,8 @@ DESCRIPTORS = (
     "sin sal", "sin azucar", "sin gluten", "libre de gluten", "sin tacc",
     "natural", "casero", "casera", "espuma", "sabor", "listo", "fortificada",
     "fortificado", "con vitaminas", "masa madre", "para pizzas",
+    "deshidratado", "deshidratada", "sin gas", "con gas", "mineralizada",
+    "baja en sodio", "descafeinado", "en hebras", "molida",
 )
 
 # Líneas que no son ningún campo: texto legal, de trazabilidad o de servicio.
@@ -83,6 +91,10 @@ _MIN_LETTER_RATIO = 0.6
 
 # Confianza mínima del motor para que un bloque pueda ser nombre o marca.
 MIN_ENGINE_CONFIDENCE = 0.5
+
+# Vocabulario con el que se decide si una palabra pegada por el motor
+# (`CAFÉINSTANTÁNEO`) esconde una categoría. Ver `_has_category`.
+_KNOWN_TERMS = frozenset(CATEGORIES) | frozenset(DESCRIPTORS)
 
 # Dos bloques se funden si sus alturas no difieren más que esto…
 _MERGE_HEIGHT_TOLERANCE = 0.35
@@ -135,11 +147,44 @@ def parse(
     name_block = _pick_name(blocks)
     brand_block = _pick_brand(blocks, name_block)
 
+    name, glued_brand = _split_leading_brand(name_block.text if name_block else "")
+
+    brand = _as_field(brand_block, _brand_parser_confidence)
+    # Si no había un bloque de marca aparte, la marca puede ser lo que se acaba
+    # de recortar del nombre: ahí el agrupamiento la había pegado, no perdido.
+    if brand_block is None and glued_brand:
+        brand = _as_field(name_block, _brand_parser_confidence, text=glued_brand)
+
     return {
-        "nombre_producto": _as_field(name_block, _name_parser_confidence),
-        "marca": _as_field(brand_block, _brand_parser_confidence),
+        "nombre_producto": _as_field(name_block, _name_parser_confidence, text=name),
+        "marca": brand,
         "detalles": _details(blocks, name_block, brand_block),
     }
+
+
+def _split_leading_brand(text: str) -> tuple[str, str | None]:
+    """Separa la marca que el agrupamiento haya pegado delante del nombre.
+
+    Cuando la marca y el nombre están impresos en cuerpos parecidos y uno
+    encima del otro —`Alicante` sobre `Perejil`—, el agrupamiento por geometría
+    los une en un solo bloque, y el nombre del producto sale con la marca
+    adelante: `Alicante Perejil`. Separarlos por geometría no se puede; el
+    vocabulario sí sabe cuál es cuál.
+
+    Se recorta **sólo** cuando la categoría aparece después de la primera
+    palabra y nada de lo que la precede nombra una categoría. Eso deja intactos
+    los nombres que empiezan por su propia categoría, que son la mayoría:
+    `Leche Entera`, `YOGUR FIRME FRUTILLA` y `CAFE TOSTADO MOLIDO` no se tocan,
+    porque ahí el recorte se comería el nombre en vez de la marca.
+    """
+    words = text.split()
+
+    for index in range(1, len(words)):
+        head, tail = " ".join(words[:index]), " ".join(words[index:])
+        if _has_category(tail) and not _has_category(head):
+            return tail, head if _is_readable(head) else None
+
+    return text, None
 
 
 # ── Agrupamiento ──────────────────────────────────────────────────────────────
@@ -298,14 +343,23 @@ def _details(blocks: list[Block], name: Block | None, brand: Block | None) -> Ex
     )
 
 
-def _as_field(block: Block | None, parser_confidence) -> ExtractedField:
+def _as_field(block: Block | None, parser_confidence, text: str | None = None) -> ExtractedField:
+    """Campo puntuado con la confianza del bloque que lo aportó.
+
+    `text` permite ofrecer un recorte del bloque —la marca y el nombre que el
+    agrupamiento pegó— conservando la confianza del motor sobre esas palabras.
+    """
     if block is None:
         return scoring.missing()
 
+    value = block.text if text is None else text
+    if not value:
+        return scoring.missing()
+
     return scoring.field(
-        value=block.text,
+        value=value,
         engine_conf=block.confidence,
-        parser_conf=parser_confidence(block.text),
+        parser_conf=parser_confidence(value),
     )
 
 
@@ -348,8 +402,49 @@ def _brand_parser_confidence(value: str) -> float:
 
 
 def _has_category(value: str) -> bool:
-    normalized = _normalize(value)
-    return any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in CATEGORIES)
+    """Si la línea nombra una categoría de producto.
+
+    El nombre del producto cuelga entero de esta decisión, y los motores no
+    respetan los límites de palabra: sobre las mismas fotos aparecen las dos
+    formas de romperlos.
+
+    - **De más.** `C AFÉ` por `CAFÉ`: la versalita inicial sale como token
+      suelto. Lo repara `_normalize`, que pega la letra suelta a la palabra que
+      sigue.
+    - **De menos.** `O CAFÉ`, donde la `O` no es una letra partida sino una
+      marca del logo. Ahí la misma reparación estorba —deja `ocafe`— así que
+      también se prueba la forma sin pegar.
+    - **Al revés.** `CAFÉINSTANTÁNEO`, dos palabras que el motor devolvió como
+      una sola región. Para esas, la categoría se busca como prefijo de palabra
+      en vez de como palabra entera.
+
+    Para el último caso **no alcanza con buscar la categoría como prefijo**: eso
+    convertiría en nombre a media góndola de marcas derivadas de su propio
+    producto (`Yogurisimo` empieza con `yogur`, `Manisero` con `mani`), que es
+    exactamente la confusión entre marca y nombre que este parser existe para
+    evitar. Una palabra pegada cuenta sólo si **lo que sigue a la categoría es
+    otro término conocido** —`cafeinstantaneo` es `cafe` + `instantaneo`, un
+    calificativo del vocabulario—, y `yogurisimo` no lo es porque `isimo` no
+    nombra nada.
+    """
+    forms = {_normalize(value), _collapse(value)}
+
+    return any(_mentions_category(form) for form in forms)
+
+
+def _mentions_category(normalized: str) -> bool:
+    if any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in CATEGORIES):
+        return True
+
+    return any(_is_glued_category(word) for word in normalized.split())
+
+
+def _is_glued_category(word: str) -> bool:
+    """`cafeinstantaneo` → `cafe` + `instantaneo`, dos términos del vocabulario."""
+    return any(
+        word.startswith(term) and word[len(term):] in _KNOWN_TERMS
+        for term in CATEGORIES
+    )
 
 
 def _is_descriptor(value: str) -> bool:
@@ -422,7 +517,16 @@ def _normalize(value: str) -> str:
     Se exige que lo que sigue sea una palabra de dos letras o más: si no, una
     lectura fallida como `( E Y e L` se pegaría en `eyel` y pasaría por texto.
     """
-    collapsed = re.sub(r"[^\w\s]+", " ", fold(value))
-    collapsed = re.sub(r"\s+", " ", collapsed).strip()
+    return re.sub(r"\b([a-z])\s+(?=[a-z]{2,})", r"\1", _collapse(value))
 
-    return re.sub(r"\b([a-z])\s+(?=[a-z]{2,})", r"\1", collapsed)
+
+def _collapse(value: str) -> str:
+    """Minúsculas sin acentos y con la puntuación vuelta espacio, sin pegar nada.
+
+    Es `_normalize` sin su reparación de la letra suelta. La usa `_has_category`
+    para poder mirar la línea también como vino, porque esa reparación acierta
+    en `C AFÉ` pero estorba en `O CAFÉ`.
+    """
+    collapsed = re.sub(r"[^\w\s]+", " ", fold(value))
+
+    return re.sub(r"\s+", " ", collapsed).strip()

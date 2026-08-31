@@ -16,12 +16,21 @@ from app.schemas.ocr import ExtractedField, ReceiptItem
 KEY_FIELDS = ("fecha_compra",)
 
 # Líneas de encabezado/pie que no son ítems.
+#
+# El segundo bloque salió de un ticket fiscal real (factura B de DIA): debajo
+# del total, un comprobante argentino imprime media docena de renglones con
+# importe —régimen de transparencia fiscal, tributos, medios de pago, ahorro
+# del programa de fidelidad— y todos tienen exactamente la forma de un ítem.
+# Sin filtrarlos, el ticket cargaba `INDIRECTOS`, `AHORRO OFERTAS` y
+# `Suma de sus pagos` como productos del inventario.
 _SKIP_TOKENS = (
     "total", "subtotal", "sub total", "iva", "descuento", "efectivo", "vuelto",
     "cambio", "tarjeta", "debito", "credito", "cuit", "ingresos brutos",
     "consumidor final", "factura", "ticket", "remito", "comprobante", "caja",
     "cajero", "gracias", "resp inscripto", "n de", "nro", "cae", "importe",
     "fecha", "hora", "emision",
+    "ahorro", "suma de sus pagos", "tributos", "indirectos", "regimen",
+    "transparencia", "referencia", "registro", "orientacion", "descripcion",
 )
 
 # Una línea que contiene una fecha es metadata del comprobante, no un ítem.
@@ -29,8 +38,18 @@ _DATE_LIKE = re.compile(r"\d{1,4}[/\-.]\d{1,2}[/\-.]\d{2,4}")
 
 _TOTAL_LINE = re.compile(r"\b(total|importe\s+total)\b", re.IGNORECASE)
 
-# Números con formato monetario argentino: 1.234,56 · 1234,56 · 1234.56 · 1234
-_AMOUNT = re.compile(r"\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?")
+# Un importe es un token numérico **completo**: dígitos con sus separadores,
+# delimitado a los dos lados por algo que no sea dígito, punto ni coma.
+#
+# Los delimitadores son lo importante. Sin ellos, un patrón que empieza por
+# `\d{1,3}` muerde los tres primeros dígitos de `16015.25`, y el resto se lee
+# como importes sueltos: el último, `25`, terminaba siendo el total del
+# ticket. Qué significa cada separador lo decide `_to_amount`.
+_AMOUNT = re.compile(r"(?<![\d.,])\d[\d.,]*\d(?![\d.,])|(?<![\d.,])\d(?![\d.,])")
+
+# Columna de alícuota de IVA de una factura A/B: `PAN ARTESANO (21,00) 8909,00`.
+# Va pegada a la descripción y no forma parte del nombre del producto.
+_IVA_COLUMN = re.compile(r"\(\s*\d{1,2}[.,]\d{2}\s*\)")
 
 # «2 x Leche» · «2x Leche» · «2xLeche» — el OCR suele comerse los espacios
 # alrededor de la «x», así que acá la separación es opcional.
@@ -210,7 +229,8 @@ def _split_quantity(body: str) -> tuple[int | None, str | None]:
 
 def _clean_name(value: str) -> str | None:
     # No se recortan letras (`x`): un producto puede llamarse "Max" o "Box".
-    cleaned = re.sub(r"\s+", " ", value).strip(" -_.·*")
+    cleaned = _IVA_COLUMN.sub(" ", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_.·*")
     return cleaned or None
 
 
@@ -223,10 +243,29 @@ def _is_valid_name(name: str) -> bool:
 
 
 def _to_amount(raw: str) -> float | None:
-    """`1.234,56` → `1234.56`; `1234.56` → `1234.56`."""
-    value = raw
-    if "," in value:
-        value = value.replace(".", "").replace(",", ".")
+    """Interpreta un importe cuyos separadores son ambiguos.
+
+    Un ticket argentino usa coma decimal (`8909,00`), pero **el mismo ticket**
+    puede imprimir el total con punto: la factura B de DIA lista los ítems como
+    `8909,00` y el total como `16015.25`. Así que no alcanza con asumir una
+    convención; hay que deducirla de cada número.
+
+    La regla es la estándar: manda el separador que aparece **último**, porque
+    el decimal siempre va al final. Si sólo hay puntos, es decimal únicamente
+    cuando detrás quedan una o dos cifras — `1.234` son mil doscientos treinta y
+    cuatro, no uno coma dos tres cuatro.
+    """
+    last_dot = raw.rfind(".")
+    last_comma = raw.rfind(",")
+
+    if last_comma > last_dot:
+        value = raw.replace(".", "").replace(",", ".")
+    elif last_dot > last_comma:
+        decimals = len(raw) - last_dot - 1
+        is_decimal = decimals <= 2 and raw.count(".") == 1
+        value = raw.replace(",", "") if is_decimal else raw.replace(",", "").replace(".", "")
+    else:
+        value = raw
 
     try:
         return round(float(value), 2)

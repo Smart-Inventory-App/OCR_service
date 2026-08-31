@@ -26,14 +26,16 @@ class Settings(BaseSettings):
     # servicio no ejecuta ningún motor: los coordina.
     TESSERACT_SERVICE_URL: str = "http://tpp_ocr_tesseract:8005"
     EASYOCR_SERVICE_URL: str = "http://tpp_ocr_easyocr:8006"
+    PADDLEOCR_SERVICE_URL: str = "http://tpp_ocr_paddleocr:8007"
 
     # Clave compartida con los servicios de motor. Vacía = sin control de acceso.
     ENGINE_API_KEY: str = ""
 
-    # EasyOCR tarda segundos por documento: necesita más margen que Tesseract.
+    # EasyOCR y PaddleOCR tardan segundos por documento: necesitan más margen que
+    # Tesseract.
     ENGINE_TIMEOUT_SECONDS: float = 120.0
 
-    OCR_ENGINE: str = "hybrid"  # tesseract | easyocr | hybrid
+    OCR_ENGINE: str = "hybrid"  # tesseract | easyocr | paddleocr | hybrid
     OCR_LANG: str = "spa"
 
     # Redis (cola de trabajos + caché de resultados)
@@ -50,7 +52,14 @@ class Settings(BaseSettings):
     # motor de respaldo.
     HYBRID_FALLBACK_THRESHOLD: float = 0.70
     HYBRID_PRIMARY_ENGINE: str = "tesseract"
-    HYBRID_FALLBACK_ENGINE: str = "easyocr"
+    # Cuál de los dos motores pesados conviene como respaldo es una pregunta
+    # empírica, y la responde `python -m bench.run_benchmark`: sobre las fotos
+    # reales del proyecto, PaddleOCR es el único motor que pasa los dos
+    # criterios de aceptación por sí solo, y con él de respaldo el híbrido
+    # también los pasa. Con EasyOCR el híbrido acierta más campos clave pero con
+    # confianzas que no llegan a 0,70, así que la mitad de los documentos van a
+    # revisión manual igual.
+    HYBRID_FALLBACK_ENGINE: str = "paddleocr"
 
     # ── Estrategia de intentos (la decide este servicio, no los motores) ───────
     # Ante una lectura pobre se prueban otras variantes de preparación y se
@@ -78,7 +87,8 @@ class Settings(BaseSettings):
     STAMP_MIN_WIDTH: int = 2400
     STAMP_MAX_WIDTH: int = 3600
 
-    # Ancho que se le pide a un motor que prepara su propia entrada (EasyOCR).
+    # Ancho que se le pide a un motor que prepara su propia entrada (EasyOCR,
+    # PaddleOCR).
     # No es un detalle de implementación del motor: es una decisión de calidad
     # contra costo, y por eso la toma el coordinador. En una etiqueta 800 px
     # alcanzan y sobran; en un sello de vencimiento son la diferencia entre leer
