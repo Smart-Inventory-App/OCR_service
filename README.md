@@ -67,9 +67,7 @@ El costo del coordinador después de la mudanza:
 
 Y una ganancia operativa: **el motor caro se enciende sólo cuando se lo usa**. Si un motor pesado está apagado, el coordinador lo reporta como no disponible, el banco de pruebas deshabilita esa opción y el modo híbrido degrada a Tesseract en lugar de fallar.
 
-> El modo **híbrido no es un motor** y por eso no tiene repositorio: es la
-> decisión de cuándo vale la pena pagar el motor caro, y esa decisión es del
-> coordinador.
+> El modo **híbrido no es un motor** y por eso no tiene repositorio: es la decisión de cuándo vale la pena pagar el motor caro, y esa decisión es del coordinador.
 
 ### 3. Precisión sobre Fotos Reales de Producto
 
@@ -77,11 +75,7 @@ El conjunto de trabajo son fotos de celular de productos reales, con fondo domé
 
 **a) Búsqueda de orientación.** Las cuatro fotos de vencimiento del conjunto llegan **giradas un cuarto de vuelta**: el dato está impreso en un canto del envase y no hay forma cómoda de fotografiarlo derecho. Ningún motor lee texto girado 90°. El coordinador prueba las cuatro orientaciones y conserva la que lee.
 
-> Se evaluó usar el detector de orientación de Tesseract (OSD, `--psm 0`) para
-> evitar la búsqueda. **No sirve acá:** sobre estas mismas fotos falló en la
-> mitad de los casos por "too few characters", y en las que respondió se
-> equivocó, con confianza menor a 3. Probar las cuatro sale más barato que
-> confiar en él.
+> Se evaluó usar el detector de orientación de Tesseract (OSD, `--psm 0`) para evitar la búsqueda. **No sirve acá:** sobre estas mismas fotos falló en la mitad de los casos por "too few characters", y en las que respondió se equivocó, con confianza menor a 3. Probar las cuatro sale más barato que confiar en él.
 
 **b) Umbral adaptativo para el sello.** Es lo único que levanta la matriz de puntos. Va **sin inversión y sin CLAHE**, al revés que el resto de las variantes: el umbral adaptativo calcula su propia referencia en cada ventana, así que un realce global de contraste antes no le agrega información, le agrega grano — y el grano es indistinguible de los puntos del sello. Con CLAHE encendido, `24 OCT 27` no se lee; sin él, sí.
 
@@ -186,13 +180,7 @@ Por campo:
 
 **PaddleOCR supera el 85 % en campos clave** sobre casi el doble de documentos que la medición anterior, y con los tres tipos de documento representados. Los dos motores livianos quedan lejos: sobre fotos reales Tesseract no llega ni a la mitad.
 
-> **Los dos fallos de EasyOCR** son del contenedor, no del motor: se quedó sin
-> memoria durante la corrida y dejó de responder a dos peticiones (Docker
-> Desktop reparte ~2 GB entre *todos* los contenedores y con los dos motores
-> pesados arriba no alcanza). Sus porcentajes están calculados sobre los 12
-> documentos que sí completó, así que **no son comparables** con los de los
-> otros tres. Es también el motivo por el que el coordinador propaga un motor
-> caído como `502` en vez de devolver una lectura vacía.
+> **Los dos fallos de EasyOCR** son del contenedor, no del motor: se quedó sin memoria durante la corrida y dejó de responder a dos peticiones (Docker Desktop reparte ~2 GB entre *todos* los contenedores y con los dos motores pesados arriba no alcanza). Sus porcentajes están calculados sobre los 12 documentos que sí completó, así que **no son comparables** con los de los otros tres. Es también el motivo por el que el coordinador propaga un motor caído como `502` en vez de devolver una lectura vacía.
 
 Los tres campos clave que ningún motor resuelve:
 
@@ -299,18 +287,9 @@ También se puede elegir **por petición**, que es lo que usa el banco de prueba
 { "image_url": "...", "doc_type": "expiry_date", "engine": "hybrid" }
 ```
 
-> **Por qué conviene combinarlos.** Los motores son **complementarios, no
-> redundantes**. Sobre el sello de la harina, Tesseract acierta y EasyOCR no;
-> sobre el de la leche, al revés. Sobre la etiqueta de la harina, Tesseract no
-> levanta nada y los otros dos la leen entera. Combinar recupera lo mejor de
-> cada uno — que es precisamente el argumento con que la propuesta deja abierta
-> esta opción.
+> **Por qué conviene combinarlos.** Los motores son **complementarios, no redundantes**. Sobre el sello de la harina, Tesseract acierta y EasyOCR no; sobre el de la leche, al revés. Sobre la etiqueta de la harina, Tesseract no levanta nada y los otros dos la leen entera. Combinar recupera lo mejor de cada uno — que es precisamente el argumento con que la propuesta deja abierta esta opción.
 >
-> Cuál va de respaldo **no se eligió, se midió**: con EasyOCR el híbrido acierta
-> más campos clave pero con confianzas bajo el umbral, y con PaddleOCR acierta
-> uno menos y pasa el gate. Es una variable (`HYBRID_FALLBACK_ENGINE`) y el
-> benchmark es el que la decide; si mañana el dataset crece y la respuesta
-> cambia, se cambia el `.env` y no el código.
+> Cuál va de respaldo **no se eligió, se midió**: con EasyOCR el híbrido acierta más campos clave pero con confianzas bajo el umbral, y con PaddleOCR acierta uno menos y pasa el gate. Es una variable (`HYBRID_FALLBACK_ENGINE`) y el benchmark es el que la decide; si mañana el dataset crece y la respuesta cambia, se cambia el `.env` y no el código.
 
 ### 3. Parsing
 
@@ -408,12 +387,8 @@ Sube la foto como imagen temporal, encola el job y la descarta al terminar.
 
 **Errores:** `400` formato no soportado, archivo vacío o binario que no es una imagen · `401` token inválido · `502` el storage no respondió · `503` cola no disponible.
 
-> **El flujo de la App son dos escaneos.** Primero la etiqueta
-> (`doc_type=product_label`) para el nombre, la marca y los detalles; después,
-> si el producto tiene vencimiento, la foto del sello
-> (`doc_type=expiry_date`). Son dos llamadas independientes: no hay que mandar
-> las dos imágenes juntas, y un producto sin fecha simplemente no hace la
-> segunda.
+> **El flujo de la App son dos escaneos.** Primero la etiqueta (`doc_type=product_label`) para el nombre, la marca y los detalles; después,
+> si el producto tiene vencimiento, la foto del sello (`doc_type=expiry_date`). Son dos llamadas independientes: no hay que mandar las dos imágenes juntas, y un producto sin fecha simplemente no hace la segunda.
 
 ### `POST /ocr/jobs` — Encolar una Imagen Ya Subida
 
@@ -463,9 +438,7 @@ Para `doc_type=expiry_date`, `fields` trae únicamente `fecha_vencimiento`. Para
 
 **Errores:** `404` job inexistente o expirado · `503` cola no disponible.
 
-> El token del llamador se guarda en una clave de Redis **separada** del estado
-> del job (se necesita para descartar la imagen temporal) y se borra en cuanto el
-> job termina: nunca sale por la API.
+> El token del llamador se guarda en una clave de Redis **separada** del estado del job (se necesita para descartar la imagen temporal) y se borra en cuanto el job termina: nunca sale por la API.
 
 ### `POST /ocr/sync` — Versión Sincrónica (URL)
 
@@ -493,9 +466,7 @@ Público. Lo usa el banco de pruebas para no ofrecer un motor apagado.
 ### `GET /ocr/livez` · `GET /ocr/readyz`
 
 - `livez` → `{ "status": "ok" }`. Sin dependencias.
-- `readyz` → verifica Redis **y** que el motor configurado responda. Se comprueba
-  el motor configurado, no todos: que EasyOCR esté apagado no debería marcar el
-  servicio como caído si el que se usa es Tesseract.
+- `readyz` → verifica Redis **y** que el motor configurado responda. Se comprueba el motor configurado, no todos: que EasyOCR esté apagado no debería marcar el servicio como caído si el que se usa es Tesseract.
 
 ---
 
@@ -545,8 +516,7 @@ curl http://localhost:8003/ocr/engines
 
 Swagger en `http://localhost:8003/docs`. Logs del worker con `docker-compose logs -f worker`.
 
-> `JWT_SECRET` en `.env` **debe** ser el mismo que usa el servicio `auth`, o
-> todos los `/ocr/*` responderán `401`.
+> `JWT_SECRET` en `.env` **debe** ser el mismo que usa el servicio `auth`, o todos los `/ocr/*` responderán `401`.
 
 ### Sin Docker
 
@@ -574,9 +544,7 @@ uvicorn app.main:app --reload --port 8003
 python -m app.worker
 ```
 
-> **Sin Redis** la API arranca igual y `POST /ocr/sync/upload` funciona
-> perfectamente: la caché es opcional y el modo sincrónico no usa la cola. Sólo
-> los endpoints asincrónicos devolverán `503`.
+> **Sin Redis** la API arranca igual y `POST /ocr/sync/upload` funciona perfectamente: la caché es opcional y el modo sincrónico no usa la cola. Sólo los endpoints asincrónicos devolverán `503`.
 
 ---
 
@@ -653,10 +621,7 @@ Los tres repositorios de motor tienen sus propias suites, que cubren la cadena d
 
 **365 tests en total** en los cuatro repositorios del módulo.
 
-> Ninguna suite lee las fotos del proyecto: el dataset real vive fuera del
-> repositorio y los tests se sostienen solos con imágenes generadas en memoria,
-> motores dobles y `fakeredis`. Las fotos son para el **benchmark**, que es otra
-> cosa: mide precisión, no evita regresiones.
+> Ninguna suite lee las fotos del proyecto: el dataset real vive fuera del repositorio y los tests se sostienen solos con imágenes generadas en memoria, motores dobles y `fakeredis`. Las fotos son para el **benchmark**, que es otra cosa: mide precisión, no evita regresiones.
 
 ---
 
@@ -664,10 +629,7 @@ Los tres repositorios de motor tienen sus propias suites, que cubren la cadena d
 
 La propuesta lo pide explícitamente:
 
-> "Durante el desarrollo del proyecto se realizará una evaluación comparativa
-> entre estas herramientas mediante pruebas sobre datos reales, considerando
-> métricas como precisión de reconocimiento, tiempo de respuesta y consumo de
-> recursos."
+> "Durante el desarrollo del proyecto se realizará una evaluación comparativa entre estas herramientas mediante pruebas sobre datos reales, considerando métricas como precisión de reconocimiento, tiempo de respuesta y consumo de recursos."
 
 ```bash
 python -m bench.run_benchmark --dataset bench/dataset
