@@ -62,6 +62,75 @@ def test_label_recovers_a_split_first_letter():
     assert fields["marca"].value == "LaVirginia"
 
 
+def test_label_recovers_a_category_glued_to_its_qualifier():
+    """PaddleOCR devuelve regiones, no palabras: `CAFEINSTANTANEO` sale pegado."""
+    output = make_output(["LaVirginia", "CAFEINSTANTANEO", "en sobres"], heights=[70, 34, 18])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "CAFEINSTANTANEO"
+    assert fields["marca"].value == "LaVirginia"
+
+
+def test_a_brand_derived_from_its_category_is_not_the_name():
+    """`Yogurisimo` empieza con `yogur` y aun así es la marca, no el producto.
+
+    Es el límite de la reparación anterior: se acepta una categoría pegada sólo
+    cuando lo que sigue es otro término conocido. `isimo` no nombra nada.
+    """
+    output = make_output(
+        ["Yogurisimo", "YOGUR FIRME FRUTILLA", "190 g"], heights=[70, 34, 16]
+    )
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "YOGUR FIRME FRUTILLA"
+    assert fields["marca"].value == "Yogurisimo"
+
+
+def test_a_condiment_is_a_product_category():
+    """Faltaban enteras: sin `perejil`, el nombre caía en la marca.
+
+    Las alturas son parecidas a propósito: así el agrupamiento une la marca con
+    el nombre en un solo bloque, que es lo que pasa en la foto real del envase.
+    """
+    output = make_output(
+        ["Alicante", "Perejil", "deshidratado", "25 g"], heights=[46, 60, 30, 14]
+    )
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "Perejil"
+    assert fields["marca"].value == "Alicante"
+
+
+def test_a_name_that_starts_with_its_category_is_not_trimmed():
+    """El recorte de marca pegada no debe comerse la primera palabra del nombre."""
+    for lines, heights in (
+        (["Leche", "Entera", "1 litro"], [40, 40, 16]),
+        (["Yogurisimo", "YOGUR FIRME FRUTILLA", "190 g"], [70, 34, 16]),
+    ):
+        output = make_output(lines, heights=heights)
+
+        nombre = product_label.parse(output, output.text, TODAY)["nombre_producto"].value
+
+        assert nombre in ("Leche Entera", "YOGUR FIRME FRUTILLA")
+
+
+def test_label_survives_a_logo_mark_before_the_category():
+    """La `O` del logo no es una versalita partida: pegarla borraría `CAFE`.
+
+    Además se recorta del nombre, por la misma regla que separa la marca que el
+    agrupamiento pega adelante: lo que precede a la categoría no es el producto.
+    """
+    output = make_output(["Cabrales", "O CAFE TOSTADO", "250 g"], heights=[80, 40, 16])
+
+    fields = product_label.parse(output, output.text, TODAY)
+
+    assert fields["nombre_producto"].value == "CAFE TOSTADO"
+    assert fields["marca"].value == "Cabrales"
+
+
 def test_label_does_not_extract_expiry_date():
     """El vencimiento tiene su propio tipo de documento y su propia foto."""
     output = make_output(["LECHE ENTERA", "VTO 15/08/2027"], heights=[40, 20])
@@ -249,6 +318,82 @@ def test_receipt_skips_header_and_footer_lines():
 
     assert not any("TOTAL" in name or "CUIT" in name for name in names)
     assert "SUPERMERCADO LA ESQUINA" not in names
+
+
+# ---------------------------------------------------------------------------
+# Factura fiscal argentina — los tres casos salieron de un ticket real de DIA
+# ---------------------------------------------------------------------------
+
+FACTURA_B_LINES = [
+    "DIA ARGENTINA SA",
+    "CUIT:30-63584975-1",
+    "FACTURA B ORIGINAL (COD. 006)",
+    "NUM.08028-00545295 22-08-2026 17:04:50",
+    "Descripcion (%IVA) [%BI ] IMPORTE",
+    "1,00X 8909,00",
+    "PAN ARTESANO BIMBO (21,00) 8909,00",
+    "1,00X 4475,00",
+    "YOG FRUT 0% LACTOSA (21,00) 4475,00",
+    "SUBTOTAL: 17134,00",
+    "DESCUENTOS: -1118,75",
+    "TOTAL $ 16015.25",
+    "IVA CONTENIDO 2779,51",
+    "OTROS TRIBUTOS NACIONALES",
+    "INDIRECTOS 0,00",
+    "TARJETA $16015.25",
+    "Suma de sus pagos: $16015.25",
+    "AHORRO OFERTAS 1118,75",
+    "TOT AHORRO 1118,75",
+]
+
+
+def test_receipt_total_with_a_dot_decimal_among_comma_decimals():
+    """El mismo ticket lista los ítems con coma y el total con punto.
+
+    Antes el importe se partía en `160`, `15` y `25`, y el total del documento
+    quedaba en 25,00 pesos.
+    """
+    output = make_output(FACTURA_B_LINES)
+
+    fields, _ = receipt.parse(output, output.text, TODAY)
+
+    assert fields["total"].value == 16015.25
+
+
+def test_receipt_drops_the_iva_column_from_the_item_name():
+    """`(21,00)` es la alícuota de la factura, no parte del producto."""
+    output = make_output(FACTURA_B_LINES)
+
+    _, items = receipt.parse(output, output.text, TODAY)
+    names = [item.nombre_producto.value for item in items]
+
+    assert "PAN ARTESANO BIMBO" in names
+    assert "YOG FRUT 0% LACTOSA" in names
+
+
+def test_receipt_ignores_the_fiscal_footer_of_a_real_invoice():
+    """Debajo del total hay media docena de renglones con forma de ítem."""
+    output = make_output(FACTURA_B_LINES)
+
+    _, items = receipt.parse(output, output.text, TODAY)
+    names = [item.nombre_producto.value for item in items]
+
+    assert names == ["PAN ARTESANO BIMBO", "YOG FRUT 0% LACTOSA"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("16015.25", 16015.25),   # punto decimal
+        ("8909,00", 8909.00),     # coma decimal
+        ("1.234,56", 1234.56),    # punto de miles + coma decimal
+        ("1.234", 1234.0),        # punto de miles solo: no es 1,234
+        ("1.234.567,89", 1234567.89),
+        ("1234", 1234.0),
+    ],
+)
+def test_amounts_are_read_under_both_conventions(raw, expected):
+    assert receipt._to_amount(raw) == expected
 
 
 def test_receipt_quantity_suffix_format():

@@ -282,11 +282,20 @@ def test_remote_engine_sends_the_shared_key(monkeypatch):
 def test_factory_builds_each_concrete_engine_from_its_service_url():
     assert factory.build_engine("tesseract").base_url == settings.TESSERACT_SERVICE_URL.rstrip("/")
     assert factory.build_engine("easyocr").base_url == settings.EASYOCR_SERVICE_URL.rstrip("/")
+    assert factory.build_engine("paddleocr").base_url == settings.PADDLEOCR_SERVICE_URL.rstrip("/")
+
+
+def test_the_three_engines_of_the_proposal_are_available():
+    """Tesseract, PaddleOCR y EasyOCR son los que la propuesta manda comparar."""
+    assert set(factory.CONCRETE_ENGINES) == {"tesseract", "easyocr", "paddleocr"}
 
 
 def test_factory_declares_who_benefits_from_preprocessing():
     assert factory.build_engine("tesseract").supports_preprocessing is True
     assert factory.build_engine("easyocr").supports_preprocessing is False
+    # PP-OCR normaliza y reescala dentro de la red y espera color, igual que
+    # EasyOCR: variarle los filtros gasta corridas caras sin cambiar nada.
+    assert factory.build_engine("paddleocr").supports_preprocessing is False
 
 
 def test_factory_memoizes_engines():
@@ -295,19 +304,28 @@ def test_factory_memoizes_engines():
 
 def test_factory_rejects_an_unknown_engine():
     with pytest.raises(ValueError, match="desconocido"):
-        factory.build_engine("paddleocr")
+        factory.build_engine("no-existe")
 
 
-def test_factory_builds_the_hybrid_from_the_two_concrete_engines():
+def test_factory_builds_the_hybrid_from_the_two_configured_engines():
     hybrid = factory.build_engine("hybrid")
 
     assert isinstance(hybrid, HybridEngine)
-    assert hybrid.primary.name == "tesseract"
-    assert hybrid.fallback.name == "easyocr"
+    assert hybrid.primary.name == settings.HYBRID_PRIMARY_ENGINE
+    assert hybrid.fallback.name == settings.HYBRID_FALLBACK_ENGINE
+
+
+def test_the_hybrid_can_take_any_concrete_engine_as_backup(monkeypatch):
+    """Cuál conviene de respaldo lo decide el benchmark, no el código."""
+    monkeypatch.setattr(settings, "HYBRID_FALLBACK_ENGINE", "paddleocr")
+    factory.reset_cache()
+
+    assert factory.build_engine("hybrid").fallback.name == "paddleocr"
 
 
 def test_engines_satisfy_the_protocol():
     assert isinstance(factory.build_engine("tesseract"), OCREngine)
+    assert isinstance(factory.build_engine("paddleocr"), OCREngine)
     assert isinstance(factory.build_engine("hybrid"), OCREngine)
 
 

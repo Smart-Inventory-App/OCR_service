@@ -1,9 +1,10 @@
 """Selección del motor OCR.
 
-`OCR_ENGINE` en `.env` define el motor por defecto: `tesseract`, `easyocr` o
-`hybrid`. Cada motor concreto es un servicio aparte al que se llega por HTTP; el
-híbrido no lo es: es una **estrategia de este servicio** que combina los otros
-dos, y por eso vive acá y no en ningún repositorio de motor.
+`OCR_ENGINE` en `.env` define el motor por defecto: `tesseract`, `easyocr`,
+`paddleocr` o `hybrid`. Los tres primeros son los que nombra la propuesta y cada
+uno es un servicio aparte al que se llega por HTTP; el híbrido no lo es: es una
+**estrategia de este servicio** que combina un motor principal con uno de
+respaldo, y por eso vive acá y no en ningún repositorio de motor.
 """
 
 import logging
@@ -17,9 +18,10 @@ logger = logging.getLogger(__name__)
 
 TESSERACT = "tesseract"
 EASYOCR = "easyocr"
+PADDLEOCR = "paddleocr"
 HYBRID = "hybrid"
 
-CONCRETE_ENGINES = (TESSERACT, EASYOCR)
+CONCRETE_ENGINES = (TESSERACT, EASYOCR, PADDLEOCR)
 VALID_ENGINES = (*CONCRETE_ENGINES, HYBRID)
 
 _cache: dict[str, OCREngine] = {}
@@ -111,6 +113,11 @@ def _build(key: str) -> OCREngine:
 
     if key == EASYOCR:
         return RemoteEngine(EASYOCR, settings.EASYOCR_SERVICE_URL, supports_preprocessing=False)
+
+    if key == PADDLEOCR:
+        return RemoteEngine(
+            PADDLEOCR, settings.PADDLEOCR_SERVICE_URL, supports_preprocessing=False
+        )
 
     raise ValueError(
         f"Motor OCR '{key}' desconocido. Motores válidos: {', '.join(VALID_ENGINES)}"

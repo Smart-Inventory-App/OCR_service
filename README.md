@@ -12,14 +12,16 @@ Este servicio **no ejecuta ningún motor OCR**. Los motores viven en sus propios
                      │  parsing de campos       │
                      │  confianza y umbrales    │
                      │  cola, caché, storage    │
-                     └───────┬──────────┬───────┘
-                             │          │
-              POST /engine/run          POST /engine/run
-                             ▼          ▼
-              ocr_service_tesseract   ocr_service_easyocr
-                    puerto 8005            puerto 8006
-                  (rápido, liviano)     (preciso, pesado)
+                     └────┬─────────┬─────────┬────┘
+                          │         │         │
+                         POST /engine/run     │
+                          ▼         ▼         ▼
+       ocr_service_tesseract  ocr_service_easyocr  ocr_service_paddleocr
+             puerto 8005          puerto 8006          puerto 8007
+           (rápido, liviano)    (preciso, pesado)   (el más preciso, pesado)
 ```
+
+Los tres motores son los que la propuesta manda comparar. Ninguno de ellos sabe qué documento está mirando: reciben una imagen y una transformación, y devuelven palabras con su caja y su confianza.
 
 | Caso | `doc_type` | Campos que extrae |
 |------|-----------|-------------------|
@@ -31,7 +33,7 @@ Este servicio **no ejecuta ningún motor OCR**. Los motores viven en sus propios
 
 ## Evolución del Módulo
 
-Esta sección documenta los tres cambios grandes que atravesó el OCR, con lo que los motivó y lo que se midió después de cada uno. Las secciones siguientes describen el estado actual.
+Esta sección documenta los cinco cambios grandes que atravesó el OCR, con lo que los motivó y lo que se midió después de cada uno. Las secciones siguientes describen el estado actual.
 
 ### 1. Escaneo: Etiqueta y Vencimiento
 
@@ -53,15 +55,6 @@ Los criterios de aceptación de la propuesta (`nombre de producto` y `fecha de v
 
 **El problema:** Un contenedor de **2,5 GB** que reservaba **~1,3 GB de memoria** para tener EasyOCR cargado, aunque la mayoría de las peticiones se resolvieran con Tesseract en medio segundo. Cada cambio en un parser obligaba a reconstruir y redesplegar todo eso. **Ahora:** Tres repositorios con una división de responsabilidades explícita:
 
-| | `ocr_service` | `ocr_service_tesseract` | `ocr_service_easyocr` |
-|---|---|---|---|
-| Decide qué documento es | ✅ | ❌ | ❌ |
-| Decide giro, filtros y segmentación | ✅ | ❌ | ❌ |
-| Decide cuántas veces reintentar | ✅ | ❌ | ❌ |
-| Decide cuándo pagar el motor caro | ✅ | ❌ | ❌ |
-| Extrae campos y calcula confianza | ✅ | ❌ | ❌ |
-| Ejecuta el motor | ❌ | ✅ | ✅ |
-
 Los servicios de motor reciben una imagen y una transformación, y devuelven palabras con su caja y su confianza. No saben qué documento están mirando.
 
 El costo del coordinador después de la mudanza:
@@ -72,7 +65,7 @@ El costo del coordinador después de la mudanza:
 | Memoria en ejecución | ~1,3 GB | **~30 MB** |
 | Dependencias pesadas | Tesseract + OpenCV + PyTorch | ninguna |
 
-Y una ganancia operativa: **el motor caro se enciende sólo cuando se lo usa**. Si `ocr_service_easyocr` está apagado, el coordinador lo reporta como no disponible, el banco de pruebas deshabilita esa opción y el modo híbrido degrada a Tesseract en lugar de fallar.
+Y una ganancia operativa: **el motor caro se enciende sólo cuando se lo usa**. Si un motor pesado está apagado, el coordinador lo reporta como no disponible, el banco de pruebas deshabilita esa opción y el modo híbrido degrada a Tesseract en lugar de fallar.
 
 > El modo **híbrido no es un motor** y por eso no tiene repositorio: es la
 > decisión de cuándo vale la pena pagar el motor caro, y esa decisión es del
@@ -124,76 +117,107 @@ Y cuando sí se llama al respaldo, se le ahorra la búsqueda de orientación: se
 
 ---
 
+### 4. El Tercer Motor: PaddleOCR
+
+**Antes.** De los tres motores que nombra la propuesta estaban implementados dos. PaddleOCR quedaba pendiente y la comparativa, incompleta.
+
+**El problema:** con Tesseract y EasyOCR el módulo **no llegaba a los dos criterios de aceptación a la vez** sobre fotos reales. El híbrido acertaba los ocho campos clave, pero con confianzas de 0,57–0,89: la mitad de los documentos no superaba el 0,70 por documento y terminaba en revisión manual igual. Subir la confianza a mano habría sido mentirle al usuario; hacía falta un motor que **leyera mejor de verdad**.
+
+**Ahora.** [`ocr_service_paddleocr`](../ocr_service_paddleocr) expone el mismo contrato que los otros dos, en el puerto 8007. Dos resultados medidos:
+
+- **Es el único motor que pasa los dos criterios por sí solo** (87,5 % en campos clave, 100 % de documentos sobre 0,70), y con él de respaldo el híbrido también los pasa.
+- **Lee `27FEB27` sin que haya que repararlo.** Es el sello que Tesseract leía `27FRRE` y EasyOCR `27FEBZ7`; como no hay reparación, la confianza no se penaliza y el documento supera el umbral en vez de quedar en 0,57.
+
+Incorporarlo costó **tres líneas** en este repositorio —una URL, una rama en la *factory*, una entrada en `CONCRETE_ENGINES`— y ni un cambio en los parsers, el scoring, las rutas o la estrategia. Es la validación del punto 2: la modularización se pagó sola la primera vez que hubo que agregar un motor.
+
+**Lo que sí hubo que arreglar** fue un supuesto del parser de etiquetas. PaddleOCR detecta **regiones de texto**, no palabras, así que devuelve `CAFÉINSTANTÁNEO` pegado donde Tesseract devuelve dos palabras. El reconocimiento de la categoría de producto —de la que cuelga todo el nombre— buscaba la palabra entera y no la encontraba, y el campo caía en la marca (`LaVirginia`). Ahora la categoría se reconoce también pegada, pero **sólo si lo que sigue es otro término del vocabulario**: `cafe` + `instantaneo` sí, `yogur` + `isimo` no — porque `Yogurisimo` es una marca, y aceptarla como nombre sería volver a la confusión que arregló el punto 3.e. El mismo arreglo cubre el caso inverso: una `O` de logotipo delante de `CAFÉ`, que la reparación de versalitas partidas pegaba en `ocafe`.
+
+El efecto sobre las fotos reales: PaddleOCR pasó de 58,3 % a **83,3 %** de campos y de 62,5 % a **100 %** de documentos sobre el umbral.
+
+### 5. Comprobantes Fiscales Reales
+
+**Antes.** El caso `receipt` estaba validado contra tickets **sintéticos**: dos imágenes generadas con una tipografía limpia, encabezado, tres ítems y un total. Sobre eso los cuatro motores daban 100 %.
+
+**El problema:** la primera factura B real —de DIA, con su encabezado fiscal, su columna de IVA y su pie de programa de fidelidad— rompió el parser en tres lugares distintos, y ninguno tenía que ver con el motor. PaddleOCR leyó el comprobante casi perfecto; lo que falló fue interpretarlo.
+
+| Qué salía | Por qué |
+|---|---|
+| `total = 25,00` en vez de `16015.25` | El comprobante **mezcla convenciones**: lista los ítems con coma decimal (`8909,00`) y el total con punto (`16015.25`). El patrón de importes empezaba con `\d{1,3}`, así que mordía `160`, y el resto de las cifras se leían como importes sueltos: el último, `25`, ganaba por ser el último de la línea. |
+| `INDIRECTOS`, `AHORRO OFERTAS`, `TOT AHORRO` y `Suma de sus pagos` cargados como **productos** | Debajo del total, un comprobante argentino imprime media docena de renglones con importe —régimen de transparencia fiscal, tributos, medios de pago, ahorro del programa de fidelidad— y todos tienen exactamente la forma de un ítem. |
+| `PAN ARTESANO BIMBO (21,00)` como nombre | `(21,00)` es la **columna de alícuota de IVA** de una factura A/B, que va pegada a la descripción. |
+
+**Ahora.** Los importes se tokenizan completos y la convención se deduce de cada número (manda el separador que aparece último; con puntos solos, es decimal sólo si quedan una o dos cifras detrás, porque `1.234` son mil doscientos treinta y cuatro). El pie fiscal se filtra. La alícuota se recorta del nombre.
+
+Sobre la factura real, el resultado pasó de 4/6 campos a **6/6**: `fecha_compra`, `total`, `comercio` y los tres ítems con su cantidad, con `document_confidence` 0,86 y `needs_review: false` — es decir, un comprobante que carga inventario sin intervención.
+
+**La lección, que vale para el módulo entero:** el conjunto sintético sirve para verificar que el pipeline no se rompió, pero **no descubre nada**. Los tres bugs de arriba vivieron todo este tiempo detrás de un 100 % verde, y aparecieron con la primera foto real. Lo mismo pasó con las etiquetas: la primera foto de un condimento mostró que el vocabulario de categorías no tenía **ninguna** especia, y que cuando la marca y el nombre están impresos en cuerpos parecidos —`Alicante` sobre `Perejil`— el agrupamiento por geometría los une y el nombre sale con la marca adelante.
+
+---
+
 ## Resultados Medidos - Benchmark
 
 Todo lo que sigue se reproduce con `python -m bench.run_benchmark` (ver [Benchmark](#benchmark--evaluación-comparativa-de-motores)).
 
-### Fotos Reales de Etiqueta
+### El Criterio Se Mide sobre los Campos **Clave**
 
-Fotos de celular con fondo doméstico e iluminación despareja: café instantáneo, café molido, harina, agua saborizada y leche.
+La propuesta fija el 85 % sobre "campos clave (nombre de producto, fecha de vencimiento y, en caso de tickets, cantidad, fecha de compra)". `marca`, `detalles`, `total` y `comercio` enriquecen el alta pero **no la bloquean**, y promediarlos con los clave en un solo número esconde justamente el dato que hay que mirar. Por eso el benchmark reporta las dos columnas:
 
-| Motor | `nombre_producto` | `marca` | Campos | Docs ≥70% | Latencia |
-|-------|-------------------|---------|--------|-----------|----------|
-| `tesseract` | 2/5 (40 %) | 0/5 (0 %) | 20 % | 0 % | 2,8 s |
-| `easyocr` | 3/5 (60 %) | 2/5 (40 %) | 50 % | 40 % | 4,1 s |
-| **`hybrid`** | **4/5 (80 %)** | **2/5 (40 %)** | **60 %** | **40 %** | 7,0 s |
+- **Clave** — `nombre_producto`, `fecha_vencimiento`, y en el ticket `fecha_compra` y los ítems. Es el criterio de aceptación y es lo que decide el *gate*.
+- **Todos** — incluye los accesorios. Sirve para ver cuánto se está extrayendo de más, no para aprobar el módulo.
 
-**El campo clave que fija la propuesta es `nombre_producto`, y el híbrido llega a 80 %** — cerca del 85 % exigido, contra el 40 % de Tesseract solo. La `marca` es un campo accesorio y no bloquea el alta.
+### Pruebas con Fotos Reales
 
-Los tres casos que fallan y por qué:
+Fotos de celular con fondo doméstico, iluminación despareja y envases brillantes y curvos: café instantáneo *La Virginia*, café molido *Cabrales*, harina *Pureza*, leche *aro*, perejil *Alicante*, agua *cellier* y yogur *ilolay*, la mayoría con su etiqueta y su sello de vencimiento. Los sellos llegan **girados un cuarto de vuelta** y varios están impresos en matriz de puntos. La factura es una **factura B real de DIA**, con su encabezado fiscal, su columna de IVA y su pie de programa de fidelidad.
 
-| Producto | Qué pasa |
+| Motor | Clave | Todos | Docs ≥70% | Latencia | Gate |
+|-------|-------|-------|-----------|----------|------|
+| `tesseract` | 53,3 % (8/15) | 37,5 % | 7,1 % | 4,2 s | NO |
+| `easyocr` | 69,2 % (9/13) | 59,1 % | 28,6 % | 11,1 s | NO |
+| **`paddleocr`** | **86,7 % (13/15)** | **87,5 %** | **92,9 %** | 19,6 s | casi |
+| **`hybrid`** (Tesseract + PaddleOCR) | **86,7 % (13/15)** | **87,5 %** | **92,9 %** | 19,0 s | casi |
+
+Por campo:
+
+| Motor | `nombre_producto` | `fecha_vencimiento` | `marca` | Factura (`fecha_compra`·`total`·`comercio`·ítems) |
+|-------|-------------------|---------------------|---------|---------------------------------------------------|
+| `tesseract` | 3/7 | 4/6 | 0/7 | 0 · 1 · 0 · 0 |
+| `easyocr` | 5/7 | 3/4 | 4/7 | 0 · 0 · 0 · 0 |
+| **`paddleocr`** | **6/7** | **5/6** | **6/7** | **1 · 1 · 1 · 1** |
+
+**PaddleOCR supera el 85 % en campos clave** sobre casi el doble de documentos que la medición anterior, y con los tres tipos de documento representados. Los dos motores livianos quedan lejos: sobre fotos reales Tesseract no llega ni a la mitad.
+
+> **Los dos fallos de EasyOCR** son del contenedor, no del motor: se quedó sin
+> memoria durante la corrida y dejó de responder a dos peticiones (Docker
+> Desktop reparte ~2 GB entre *todos* los contenedores y con los dos motores
+> pesados arriba no alcanza). Sus porcentajes están calculados sobre los 12
+> documentos que sí completó, así que **no son comparables** con los de los
+> otros tres. Es también el motivo por el que el coordinador propaga un motor
+> caído como `502` en vez de devolver una lectura vacía.
+
+Los tres campos clave que ningún motor resuelve:
+
+| Documento | Qué pasa |
 |---|---|
-| Agua saborizada *Levité Cero* | logotipo manuscrito sobre botella curva y transparente: el motor devuelve `levilê Yilla dlSur`. No hay parser que recupere eso. |
-| Leche *aro* | la marca está impresa **girada 90°** en el lateral del envase; el nombre (`Leche Entera`) se lee perfecto. |
-| Café *Cabrales* | la marca cruza el envase en diagonal, sobre un fondo metalizado. |
+| Etiqueta café *Cabrales* | PaddleOCR lee `CAFÉ`, `TOSTADO` y `MOLIDO`, pero en tres regiones que no se funden en un bloque, así que el nombre sale incompleto. |
+| Sello yogur *ilolay* | `L15/09/26` en matriz de puntos sobre una tapa blanca curva y brillante, fotografiada en ángulo. **Ningún motor lo detecta en ninguna de las cuatro orientaciones ni a 3200 px de ancho**: no es un problema de parser ni de resolución. |
+| Sello café *La Virginia* | resuelto, pero sólo tras probar la cuarta orientación (180°), lo que dispara la latencia a 46 s. |
 
-En los tres el servicio **no inventa un valor**: devuelve `null` y marca `needs_review`, que dispara la validación manual asistida. Es el comportamiento que la propuesta prevé para los casos que la automatización no cubre.
-
-### Fotos Reales del Sello de Vencimiento
-
-Sellos impresos sobre el envase, **los cuatro girados un cuarto de vuelta** y tres de ellos en matriz de puntos.
-
-| Motor | `fecha_vencimiento` | Docs ≥70% | Latencia | Intentos |
-|-------|---------------------|-----------|----------|----------|
-| `tesseract` | 3/4 (75 %) | 25 % | 6,7 s | 8,0 |
-| `easyocr` | 3/4 (75 %) | 25 % | 17,5 s | 3,8 |
-| **`hybrid`** | **4/4 (100 %)** | 50 % | 14,2 s | 9,8 |
-
-**El híbrido acierta las cuatro fechas.** Es el mejor argumento a favor del enfoque que la propuesta deja abierto: los motores son complementarios, no redundantes.
-
-| Producto | Sello | Tesseract | EasyOCR |
-|---|---|---|---|
-| Café La Virginia | `24 OCT 27` | ✅ (leyó `24 GCT 27`) | ❌ |
-| Café Cabrales | `VTO.: 05/01/27` | ✅ | ✅ |
-| Harina Pureza | `VTO: 15/11/26` | ✅ | ❌ |
-| Leche aro | `27FEB27` | ❌ (leyó `27FRRE`) | ✅ (leyó `27FEBZ7`) |
-
-> **Sobre la confianza.** Los valores son correctos, pero sólo 2 de 4 documentos
-> superan el umbral de 0,70. No es un defecto del parser: es que el motor mismo
-> reporta 0,4–0,7 de confianza sobre una tipografía de puntos, y el scoring **no
-> la infla**. El efecto práctico es que estas lecturas llegan a la App
-> precargadas y marcadas con `needs_review`, para que el usuario confirme la
-> fecha con un toque en lugar de tipearla. Es exactamente el mecanismo de
-> "validación manual asistida" que la propuesta prevé para los escenarios donde
-> la automatización no alcanza.
-
-> **Sobre la latencia.** Un escaneo de vencimiento cuesta más que uno de etiqueta
-> porque puede probar hasta cuatro orientaciones × dos preparaciones. Corta
-> apenas una lectura supera el umbral —la harina resuelve en 3 intentos—, y es un
-> trabajo asincrónico que la App consulta por *polling*, así que no bloquea la
-> interfaz. Se puede desactivar con `ROTATION_SEARCH_ENABLED=false` a costa de
-> fallar en las fotos giradas.
+En los tres el servicio **no inventa un valor**: devuelve `null` y marca `needs_review`, que dispara la validación manual asistida que la propuesta prevé. El único documento que queda bajo el umbral por documento es el sello del yogur, y por eso el *gate* completo —que exige el 100 % de los documentos— todavía no cierra.
 
 ### Conjunto Sintético de Control — `bench/sample_dataset/` (9 documentos)
 
-| Motor | Campos | Docs ≥70% | Latencia | Gate |
-|-------|--------|-----------|----------|------|
-| `tesseract` | 100 % | 88,9 % | 742 ms | NO |
-| `easyocr` | 100 % | 88,9 % | 1331 ms | NO |
-| **`hybrid`** | **100 %** | **100 %** | 1016 ms | **OK** |
+Es el único conjunto que cubre los **tres** tipos de documento: incluye dos tickets con sus ítems, cantidades, fecha de compra y total.
 
-El conjunto sintético cubre los tres tipos de documento e incluye un sello girado 90° y un sello con las dos fechas juntas. **El híbrido pasa el gate completo.** Sirve para verificar que el pipeline funciona de punta a punta; no reemplaza al dataset real, porque una imagen generada no tiene el ruido ni la iluminación de una foto.
+| Motor | Clave | Todos | Docs ≥70% | Latencia | Gate |
+|-------|-------|-------|-----------|----------|------|
+| `tesseract` | 100 % | 100 % | 88,9 % | 674 ms | NO |
+| `easyocr` | 100 % | 100 % | 88,9 % | 1237 ms | NO |
+| `paddleocr` | 100 % | 95,0 % | **100 %** | 4324 ms | **OK** |
+| **`hybrid`** | **100 %** | **100 %** | **100 %** | **1474 ms** | **OK** |
+
+Sobre documentos limpios el híbrido resuelve casi todo con Tesseract y sólo paga el motor caro donde hace falta: **pasa el gate completo en 1,5 s por documento**, doce veces más rápido que sobre las fotos reales. Los ítems del ticket (`fecha_compra` 2/2, `items` 2/2, `total` 2/2) salen perfectos en los cuatro motores.
+
+El conjunto sintético sirve para verificar que el pipeline funciona de punta a punta; **no reemplaza al dataset real**, porque una imagen generada no tiene el ruido ni la iluminación de una foto — se ve en que Tesseract pasa de 100 % acá a 62,5 % sobre fotos.
 
 ### Consumo de Recursos
 
@@ -203,7 +227,8 @@ Medido con `docker stats` sobre los contenedores en reposo y en proceso:
 |---|---|---|---|
 | `ocr_service` | ~770 MB | ~30 MB | — (coordina) |
 | `ocr_service_tesseract` | ~1,05 GB | ~70 MB | 0,2–0,8 s por intento |
-| `ocr_service_easyocr` | ~2,58 GB | ~450 MB | 3–5 s por intento |
+| `ocr_service_easyocr` | ~2,58 GB | ~350 MB | 3–5 s por intento |
+| `ocr_service_paddleocr` | ~2,68 GB | ~350 MB | 4–15 s por intento |
 
 ---
 
@@ -257,12 +282,10 @@ class OCREngine(Protocol):
     def is_available(self) -> bool: ...
 ```
 
-- **`tesseract`** — rápido y liviano. Da **confianza por palabra**, que es la
-  base del cálculo de `document_confidence`.
-- **`easyocr`** — basado en deep learning. Mucho mejor en envases curvos,
-  brillantes y con tipografías de fantasía; mucho más lento y pesado.
-- **`hybrid`** — el "enfoque híbrido" que la propuesta no descarta. **Es el que
-  mejor mide.**
+- **`tesseract`** — rápido y liviano. Da **confianza por palabra**, que es la base del cálculo de `document_confidence`.
+- **`easyocr`** — basado en deep learning. Mucho mejor en envases curvos, brillantes y con tipografías de fantasía; mucho más lento y pesado.
+- **`paddleocr`** — el más preciso de los tres sobre fotos reales, y el único que pasa los dos criterios de aceptación por sí solo. Detecta **regiones de texto** en vez de palabras, así que a veces devuelve dos palabras pegadas.
+- **`hybrid`** — el "enfoque híbrido" que la propuesta no descarta: Tesseract como principal y, cuando su lectura no alcanza, PaddleOCR de respaldo.
 
 Cambiar de motor es una variable de entorno:
 
@@ -276,12 +299,18 @@ También se puede elegir **por petición**, que es lo que usa el banco de prueba
 { "image_url": "...", "doc_type": "expiry_date", "engine": "hybrid" }
 ```
 
-> **Por qué el híbrido gana.** Los motores son **complementarios, no
-> redundantes**. Sobre el sello de vencimiento del café, Tesseract acierta y
-> EasyOCR no; sobre el de la leche, al revés. Sobre la etiqueta de la harina,
-> Tesseract no levanta nada y EasyOCR la lee entera. Combinarlos recupera lo
-> mejor de cada uno — que es precisamente el argumento con que la propuesta deja
-> abierta esta opción.
+> **Por qué conviene combinarlos.** Los motores son **complementarios, no
+> redundantes**. Sobre el sello de la harina, Tesseract acierta y EasyOCR no;
+> sobre el de la leche, al revés. Sobre la etiqueta de la harina, Tesseract no
+> levanta nada y los otros dos la leen entera. Combinar recupera lo mejor de
+> cada uno — que es precisamente el argumento con que la propuesta deja abierta
+> esta opción.
+>
+> Cuál va de respaldo **no se eligió, se midió**: con EasyOCR el híbrido acierta
+> más campos clave pero con confianzas bajo el umbral, y con PaddleOCR acierta
+> uno menos y pasa el gate. Es una variable (`HYBRID_FALLBACK_ENGINE`) y el
+> benchmark es el que la decide; si mañana el dataset crece y la respuesta
+> cambia, se cambia el `.env` y no el código.
 
 ### 3. Parsing
 
@@ -342,6 +371,7 @@ backoffice_backend  valida/monitorea los datos OCR cargados
 | `image_storage_service` | `8004` |
 | `ocr_service_tesseract` | `8005` |
 | `ocr_service_easyocr` | `8006` |
+| `ocr_service_paddleocr` | `8007` |
 
 ---
 
@@ -372,7 +402,7 @@ Sube la foto como imagen temporal, encola el job y la descarta al terminar.
 | `file` | archivo (`jpeg`/`png`/`webp`) | sí | — |
 | `doc_type` | `product_label` \| `expiry_date` \| `receipt` | no | `product_label` |
 | `lang` | string | no | `spa` |
-| `engine` | `tesseract` \| `easyocr` \| `hybrid` | no | el de `OCR_ENGINE` |
+| `engine` | `tesseract` \| `easyocr` \| `paddleocr` \| `hybrid` | no | el de `OCR_ENGINE` |
 
 **Respuesta `202`:** `{ "job_id": "9f2c1a...", "status": "queued" }`
 
@@ -454,7 +484,9 @@ Público. Lo usa el banco de pruebas para no ofrecer un motor apagado.
   { "name": "tesseract", "url": "http://tpp_ocr_tesseract:8005", "available": true,
     "version": "5.5.0", "languages": ["eng","osd","spa"], "supports_preprocessing": true },
   { "name": "easyocr", "url": "http://tpp_ocr_easyocr:8006", "available": true,
-    "version": "1.7.2", "languages": ["eng","spa"], "supports_preprocessing": false }
+    "version": "1.7.2", "languages": ["eng","spa"], "supports_preprocessing": false },
+  { "name": "paddleocr", "url": "http://tpp_ocr_paddleocr:8007", "available": true,
+    "version": "3.7.0", "languages": ["eng","spa"], "supports_preprocessing": false }
 ]
 ```
 
@@ -481,8 +513,11 @@ docker network create tpp-net
 cd ../ocr_service_tesseract && cp .env.example .env && docker-compose up -d --build
 ```
 
-Opcionalmente, el motor pesado (la primera build descarga PyTorch y tarda varios
-minutos):
+Los motores pesados son opcionales, pero el híbrido por defecto usa PaddleOCR de respaldo. La primera build de cada uno descarga el framework y los pesos, y tarda varios minutos:
+
+```bash
+cd ../ocr_service_paddleocr && cp .env.example .env && docker-compose up -d --build
+```
 
 ```bash
 cd ../ocr_service_easyocr && cp .env.example .env && docker-compose up -d --build
@@ -526,6 +561,7 @@ Apuntar los motores, Redis y el storage a `localhost` en el `.env`:
 ```env
 TESSERACT_SERVICE_URL=http://localhost:8005
 EASYOCR_SERVICE_URL=http://localhost:8006
+PADDLEOCR_SERVICE_URL=http://localhost:8007
 REDIS_URL=redis://localhost:6379/0
 STORAGE_SERVICE_URL=http://localhost:8004
 ```
@@ -595,7 +631,7 @@ curl http://localhost:8003/ocr/jobs/<job_id> -H "Authorization: Bearer $TOKEN"
 pytest
 ```
 
-**207 tests, 93 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
+**223 tests, 94 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
 
 | Archivo | Qué cubre |
 |---------|-----------|
@@ -607,7 +643,20 @@ pytest
 | `test_clients.py` | clientes HTTP y el loop del worker |
 | `test_acceptance.py` | **el *gate* del módulo**: precisión ≥ 85% por campo y ≥ 70% por documento |
 
-Los dos repositorios de motor tienen sus propias suites (66 y 36 tests), que cubren la cadena de OpenCV y la traducción de la salida de cada motor.
+Los tres repositorios de motor tienen sus propias suites, que cubren la cadena de OpenCV y la traducción de la salida de cada motor:
+
+| Repositorio | Tests | Cobertura |
+|---|---|---|
+| `ocr_service_tesseract` | 66 | 97 % |
+| `ocr_service_easyocr` | 36 | 91 % |
+| `ocr_service_paddleocr` | 40 | 91 % |
+
+**365 tests en total** en los cuatro repositorios del módulo.
+
+> Ninguna suite lee las fotos del proyecto: el dataset real vive fuera del
+> repositorio y los tests se sostienen solos con imágenes generadas en memoria,
+> motores dobles y `fakeredis`. Las fotos son para el **benchmark**, que es otra
+> cosa: mide precisión, no evita regresiones.
 
 ---
 
@@ -635,24 +684,35 @@ El consumo de memoria ya no se mide desde acá: cada motor es un contenedor apar
 ### Leer la Salida
 
 ```
-Motor                     Campos   Docs >=70%     Latencia   Intentos   Fallos    Gate
-tesseract                 75.0%        25.0%       6513 ms        8.0        0      NO
-easyocr                   75.0%        25.0%      15223 ms        3.8        0      NO
-hybrid                   100.0%        50.0%      12512 ms        9.5        0      NO
+Motor                   Clave    Todos   Docs >=70%     Latencia   Intentos   Fallos    Gate
+tesseract              62.5%    41.7%        12.5%       4327 ms        5.5        0      NO
+easyocr                75.0%    66.7%        37.5%       9218 ms        2.4        0      NO
+paddleocr              87.5%    83.3%       100.0%      18285 ms        1.8        0      OK
+hybrid                100.0%    83.3%        50.0%       9858 ms        6.9        0      NO
 
 DETALLE POR CAMPO
-hybrid                fecha_vencimiento: 4/4 (100%)
+paddleocr             fecha_vencimiento: 4/4 (100%)  marca: 3/4 (75%)  nombre_producto: 3/4 (75%)
 ```
 
-- **Campos** — precisión en campos clave vs. ground truth → criterio **≥ 85 %**.
+- **Clave** — precisión en los campos que la propuesta llama clave (`nombre_producto`, `fecha_vencimiento`, y en el ticket `fecha_compra` y los ítems) → criterio **≥ 85 %**. **Es la columna que decide el gate.**
+- **Todos** — la misma precisión incluyendo los accesorios (`marca`, `detalles`, `total`, `comercio`). Informativa: mezclar los accesorios con los clave en un solo número escondería el dato que importa.
 - **Docs ≥70%** — documentos que alcanzan la confianza mínima → criterio **≥ 70 %**.
 - **Intentos** — cuántas combinaciones de giro y filtros hizo falta probar.
-- **Detalle por campo** — la propuesta fija el umbral sobre los campos *clave*; mezclarlos con los accesorios en un solo número escondería el dato que importa.
-- **Gate** — si el motor cumple ambos criterios de aceptación.
+- **Gate** — si el motor cumple **ambos** criterios de aceptación. Hay que cumplir los dos: acertar el campo con una confianza que no llega al umbral igual manda el documento a revisión manual.
 
 ### Dataset Propio
 
-Las imágenes reales del proyecto **no se versionan**: `bench/dataset/` está en el `.gitignore` y llega vacío al repositorio. Colocá ahí las tuyas junto a un `ground_truth.json`:
+Las imágenes reales del proyecto **no se versionan**: `bench/dataset/` está en el `.gitignore` y llega vacío al repositorio.
+
+Si las fotos están en `Repos/imagenes/` —una carpeta por tipo de documento, cada una con su `ground_truth.json`— el dataset se arma solo:
+
+```bash
+python -m bench.load_real_dataset
+```
+
+Copia las imágenes prefijadas por tipo de documento (la etiqueta y el sello del mismo producto son los dos `milk.jpeg`, y sin prefijo uno pisaría al otro), une los ground truth en uno y **avisa de las fotos que el ground truth nombra pero no están**, que si no el benchmark las cuenta como fallo del motor. Hay que volver a correrlo cada vez que se agregan fotos.
+
+También se puede armar a mano: colocá las imágenes en `bench/dataset/` junto a un `ground_truth.json`:
 
 ```json
 {
@@ -685,9 +745,13 @@ python -m bench.make_sample_dataset
 
 Genera el conjunto sintético de `bench/sample_dataset/` con su ground truth: cuatro etiquetas (una inclinada), tres sellos de vencimiento (uno girado 90°, uno con las dos fechas juntas) y dos tickets. Necesita una tipografía TrueType en el sistema.
 
-### PaddleOCR
+### Los Tres Motores de la Propuesta
 
-La propuesta también nombra PaddleOCR. Con la arquitectura actual, incorporarlo **no toca este repositorio**: alcanza con crear un `ocr_service_paddleocr` que exponga el mismo contrato (`POST /engine/run`, `GET /engine/info`, `/livez`, `/readyz`) y agregar su URL a la configuración. La interfaz `OCREngine` no cambia, y el modo híbrido lo puede tomar como principal o como respaldo.
+Con [`ocr_service_paddleocr`](../ocr_service_paddleocr) quedan implementados los tres motores que la propuesta manda comparar, y la evaluación comparativa los cubre a todos.
+
+Vale la pena registrar **cuánto costó incorporar el tercero**, porque es la prueba de que la modularización del punto 2 valió la pena: el repositorio nuevo expone el mismo contrato (`POST /engine/run`, `GET /engine/info`, `/livez`, `/readyz`) y de este lado el cambio fueron **tres líneas** — una URL en la configuración, una rama en la *factory* y una entrada en `CONCRETE_ENGINES`. Ni los parsers, ni el scoring, ni la estrategia de intentos, ni las rutas se tocaron. La interfaz `OCREngine` no cambió, y el modo híbrido lo toma como respaldo o como principal sin saber nada de él.
+
+Agregar un cuarto motor cuesta exactamente lo mismo.
 
 ---
 
@@ -699,13 +763,15 @@ Todas las variables, con sus defaults, están en [`.env.example`](.env.example).
 |----------|---------|----------|
 | `JWT_SECRET` | — | **debe coincidir con el del servicio Auth** |
 | `TESSERACT_SERVICE_URL` | `http://tpp_ocr_tesseract:8005` | dónde vive el motor liviano |
-| `EASYOCR_SERVICE_URL` | `http://tpp_ocr_easyocr:8006` | dónde vive el motor pesado |
+| `EASYOCR_SERVICE_URL` | `http://tpp_ocr_easyocr:8006` | dónde vive un motor pesado |
+| `PADDLEOCR_SERVICE_URL` | `http://tpp_ocr_paddleocr:8007` | dónde vive el otro |
 | `ENGINE_API_KEY` | *(vacía)* | clave compartida con los motores |
 | `ENGINE_TIMEOUT_SECONDS` | `120` | EasyOCR tarda segundos por documento |
-| `OCR_ENGINE` | `hybrid` | `tesseract` \| `easyocr` \| `hybrid` |
+| `OCR_ENGINE` | `hybrid` | `tesseract` \| `easyocr` \| `paddleocr` \| `hybrid` |
 | `FIELD_CONFIDENCE_THRESHOLD` | `0.85` | umbral por campo → dispara `needs_review` |
 | `DOCUMENT_CONFIDENCE_THRESHOLD` | `0.70` | umbral por documento |
 | `HYBRID_FALLBACK_THRESHOLD` | `0.70` | confianza bajo la cual se llama al respaldo |
+| `HYBRID_FALLBACK_ENGINE` | `paddleocr` | cuál es el respaldo — lo decidió el benchmark |
 | `RETRY_ENABLED` / `RETRY_THRESHOLD` | `true` / `0.75` | estrategia de reintentos |
 | `ROTATION_SEARCH_ENABLED` | `true` | búsqueda de orientación en el sello |
 | `STAMP_MIN_WIDTH` / `STAMP_MAX_WIDTH` | `2400` / `3600` | cuánto se amplía el sello |

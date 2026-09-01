@@ -1,0 +1,109 @@
+{
+  "etiqueta_coffee_1.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "CAFE INSTANTANEO",
+      "marca": "La Virginia"
+    }
+  },
+  "etiqueta_coffee_2.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "CAFE TOSTADO MOLIDO",
+      "marca": "Cabrales"
+    }
+  },
+  "etiqueta_flour.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "HARINA",
+      "marca": "PUREZA"
+    }
+  },
+  "etiqueta_milk.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "Leche Entera",
+      "marca": "aro"
+    }
+  },
+  "etiqueta_parsley.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "Perejil",
+      "marca": "Alicante"
+    }
+  },
+  "etiqueta_water.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "Agua",
+      "marca": "cellier"
+    }
+  },
+  "etiqueta_yogurt.jpeg": {
+    "doc_type": "product_label",
+    "fields": {
+      "nombre_producto": "Yogur",
+      "marca": "ilolay"
+    }
+  },
+  "vencimiento_coffee_1.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-10-24"
+    }
+  },
+  "vencimiento_coffee_2.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-01-05"
+    }
+  },
+  "vencimiento_flour.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2026-11-15"
+    }
+  },
+  "vencimiento_milk.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2027-02-27"
+    }
+  },
+  "vencimiento_parsley.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2028-05-16"
+    }
+  },
+  "vencimiento_yogurt.jpeg": {
+    "doc_type": "expiry_date",
+    "fields": {
+      "fecha_vencimiento": "2026-09-15"
+    }
+  },
+  "ticket_dia.jpeg": {
+    "doc_type": "receipt",
+    "fields": {
+      "fecha_compra": "2026-08-22",
+      "total": 16015.25,
+      "comercio": "DIA ARGENTINA SA"
+    },
+    "items": [
+      {
+        "nombre_producto": "PAN ARTESANO BIMBO",
+        "cantidad": 1
+      },
+      {
+        "nombre_producto": "CASANCR ENTERO",
+        "cantidad": 1
+      },
+      {
+        "nombre_producto": "YOG FRUT 0% LACTOSA",
+        "cantidad": 1
+      }
+    ]
+  }
+}
