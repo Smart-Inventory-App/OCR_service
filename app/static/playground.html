@@ -109,6 +109,7 @@
           <option value="product_label">Etiqueta — nombre, marca y detalles</option>
           <option value="expiry_date">Fecha de vencimiento — sello del envase</option>
           <option value="receipt">Ticket / remito / factura</option>
+          <option value="barcode">Código de barras — EAN / UPC / ITF</option>
         </select>
       </div>
       <div>
@@ -245,10 +246,22 @@ const DOC_HINTS = {
     "Puede estar girada: el servicio prueba las cuatro orientaciones.",
   receipt:
     "Ticket, remito o factura. Extrae los ítems con su cantidad, la fecha de compra y el total.",
+  barcode:
+    "Foto del código de barras del envase. No usa motor OCR: lo decodifica ZBar " +
+    "dentro del servicio, así que el motor elegido se ignora. Puede estar girada.",
 };
 
 function updateDocHint() {
   $("docHint").textContent = DOC_HINTS[$("docType").value] || "";
+
+  // Un código de barras no lo lee ningún motor: elegir uno no cambiaría nada, y
+  // dejar el selector activo haría creer que sí. Se deshabilita con el mismo
+  // criterio con el que se deshabilitan los motores apagados.
+  const isBarcode = $("docType").value === "barcode";
+  $("engine").disabled = isBarcode;
+  $("engine").title = isBarcode
+    ? "El código de barras lo decodifica el propio servicio: el motor no interviene"
+    : "";
 }
 
 $("docType").addEventListener("change", updateDocHint);

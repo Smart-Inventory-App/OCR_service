@@ -31,6 +31,7 @@ Los tres motores son los que la propuesta manda comparar. Ninguno de ellos sabe 
 | **A** | `product_label` | `nombre_producto`, `marca`, `detalles` |
 | **B** | `expiry_date` | `fecha_vencimiento` |
 | **C** | `receipt` | por ítem: `nombre_producto`, `cantidad` · del documento: `fecha_compra`, `total`, `comercio` |
+| **D** | `barcode` | `codigo` (GTIN normalizado a EAN-13), `simbologia`, `pais_registro` |
 
 ---
 
@@ -257,6 +258,7 @@ Ninguna combinación de giro y filtros gana en todas las imágenes. En vez de el
 | `product_label` | 3: filtros base con segmentación de etiqueta, con segmentación automática, y binarizada con Otsu | la foto viene derecha; lo que varía es cómo tratar el envase |
 | `expiry_date` | 8: cuatro giros × (umbral adaptativo, sin binarizar) | el sello llega girado y es matriz de puntos |
 | `receipt` | 3: filtros base en bloque, con Otsu, y con segmentación automática | el ticket viene derecho y es texto plano |
+| `barcode` | 4: directo, ampliado, enfocado y ampliado+enfocado | no usa motor OCR |
 
 Un motor que declara `supports_preprocessing: false` recibe **un solo intento por orientación**: prepara su propia entrada y variarle los filtros no cambiaría nada, pero cada corrida cuesta segundos.
 
@@ -361,7 +363,8 @@ backoffice_backend  valida/monitorea los datos OCR cargados
 
 - Python 3.11 + FastAPI
 - Redis — cola de trabajos y caché de resultados
-- Pillow — sólo para validar que el binario recibido sea una imagen
+- Pillow — valida el binario recibido y arma las variantes del decodificador
+- `pyzbar` / `libzbar0` — decodificación de códigos de barras
 - `python-dateutil` / `rapidfuzz` — normalización de fechas y similitud de texto
 - JWT HS256 — valida los tokens del servicio Auth (mismo `JWT_SECRET`)
 
@@ -382,7 +385,7 @@ Sube la foto como imagen temporal, encola el job y la descarta al terminar.
 | Campo | Tipo | Requerido | Default |
 |-------|------|-----------|---------|
 | `file` | archivo (`jpeg`/`png`/`webp`) | sí | — |
-| `doc_type` | `product_label` \| `expiry_date` \| `receipt` | no | `product_label` |
+| `doc_type` | `product_label` \| `expiry_date` \| `receipt` \| `barcode` | no | `product_label` |
 | `lang` | string | no | `spa` |
 | `engine` | `tesseract` \| `easyocr` \| `paddleocr` \| `hybrid` | no | el de `OCR_ENGINE` |
 
@@ -602,7 +605,7 @@ curl http://localhost:8003/ocr/jobs/<job_id> -H "Authorization: Bearer $TOKEN"
 pytest
 ```
 
-**223 tests, 94 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
+**318 tests, 94 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
 
 | Archivo | Qué cubre |
 |---------|-----------|
@@ -613,6 +616,7 @@ pytest
 | `test_routes.py` | los endpoints, el ciclo de vida de la imagen temporal, auth, caché |
 | `test_clients.py` | clientes HTTP y el loop del worker |
 | `test_acceptance.py` | **el *gate* del módulo**: precisión ≥ 85% por campo y ≥ 70% por documento |
+| `test_barcode.py` | la escalera de intentos del decodificador, la normalización a GTIN y el dominio argentino |
 
 Los tres repositorios de motor tienen sus propias suites, que cubren la cadena de OpenCV y la traducción de la salida de cada motor:
 
@@ -622,7 +626,7 @@ Los tres repositorios de motor tienen sus propias suites, que cubren la cadena d
 | `ocr_service_easyocr` | 36 | 91 % |
 | `ocr_service_paddleocr` | 40 | 91 % |
 
-**365 tests en total** en los cuatro repositorios del módulo.
+**460 tests en total** en los cuatro repositorios del módulo.
 
 > Ninguna suite lee las fotos del proyecto: el dataset real vive fuera del repositorio y los tests se sostienen solos con imágenes generadas en memoria, motores dobles y `fakeredis`. Las fotos son para el **benchmark**, que es otra cosa: mide precisión, no evita regresiones.
 

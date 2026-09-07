@@ -97,6 +97,22 @@ class Settings(BaseSettings):
     ENGINE_MAX_WIDTH: int = 800
     ENGINE_STAMP_MAX_WIDTH: int = 1280
 
+    # ── Códigos de barras ─────────────────────────────────────────────────────
+    # El único reconocimiento que corre dentro de este servicio. No necesita
+    # búsqueda de orientación —ZBar recorre la imagen en varias direcciones por
+    # su cuenta— ni realce de contraste —binariza internamente—. Lo único que
+    # mueve la aguja es la resolución, y el enfoque en una banda angosta.
+    BARCODE_UPSCALE_FACTOR: int = 2
+    """Ampliación del segundo intento. Medido: recupera la banda de ~180 a ~264
+    px de ancho de código, que falla en el intento directo."""
+
+    BARCODE_SHARPEN_ENABLED: bool = True
+    """Máscara de enfoque para el desenfoque leve de una foto a pulso."""
+
+    BARCODE_MAX_PIXELS: int = 60_000_000
+    """Tope de la imagen ampliada, para acotar el pico de memoria. Ampliar al
+    doble una foto de 12 MP da 48 MP, que en escala de grises son ~48 MB."""
+
     # CORS
     ALLOWED_ORIGINS_STR: str = (
         "http://localhost:3000,http://localhost:8081,http://localhost:19000"

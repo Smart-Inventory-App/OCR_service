@@ -28,6 +28,13 @@ FIELD_WEIGHTS: dict[str, float] = {
     "detalles": 0.25,
     "comercio": 0.5,
     "total": 0.5,
+    # Código de barras: el número es el campo clave y lo demás lo describe.
+    # `simbologia` y `pais_registro` se derivan del mismo número ya verificado,
+    # así que no aportan información independiente: pesan poco a propósito, para
+    # que no inflen la confianza del documento repitiendo lo que ya dijo `codigo`.
+    "codigo": 1.0,
+    "simbologia": 0.25,
+    "pais_registro": 0.25,
 }
 
 DEFAULT_WEIGHT = 0.5

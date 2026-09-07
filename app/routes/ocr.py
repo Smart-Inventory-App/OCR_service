@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 
 from app.core.config import settings
 from app.core.security import get_bearer_token, get_current_user
+from app.decoders import barcode as barcode_decoder
 from app.schemas.ocr import (
     DocType,
     OCRJobCreated,
@@ -201,6 +202,13 @@ async def _process_cached(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"El motor OCR no está disponible: {exc}",
+        )
+    except barcode_decoder.DecoderUnavailable as exc:
+        # Mismo criterio que arriba, pero la falla es local: falta `libzbar` en
+        # esta imagen. Un 503 lo distingue del 502 de un motor remoto caído.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
         )
 
     await queue.set_cached(fingerprint, doc_type, cache_lang, result)

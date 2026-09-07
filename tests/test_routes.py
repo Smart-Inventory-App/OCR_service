@@ -7,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.schemas.ocr import DocType, JobStatus
-from tests.conftest import render_image
+from tests.conftest import barcode_photo, render_image
 
 # Una etiqueta leída bien: marca en grande, nombre debajo, contenido chico.
 LABEL_LINES = ["La Serenisima", "LECHE ENTERA", "1 litro"]
@@ -47,7 +47,9 @@ async def test_readyz_ok_when_dependencies_are_up(fake_redis):
             r = await c.get("/ocr/readyz")
 
     assert r.status_code == 200
-    assert r.json()["checks"] == {"redis": True, "engine": True}
+    # `barcode` viaja en el mismo diccionario pero es informativo: no decide el
+    # readiness. Ver `test_barcode_decoder_does_not_break_readiness`.
+    assert r.json()["checks"] == {"redis": True, "engine": True, "barcode": True}
 
 
 async def test_readyz_fails_without_redis(no_redis):
@@ -491,3 +493,94 @@ async def test_good_reading_does_not_retry(client, fake_redis, fake_engine):
     await client.post("/ocr/sync/upload", files=_files())
 
     assert len(engine.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Códigos de barras
+# ---------------------------------------------------------------------------
+
+def _barcode_files():
+    return {"file": ("codigo.png", barcode_photo("779123456789"), "image/png")}
+
+
+async def test_barcode_sync_upload(client, fake_redis):
+    """El tipo `barcode` atraviesa la vía sincrónica sin ningún motor arriba: no
+    se usa `fake_engine` porque no hay motor al que reemplazar."""
+    r = await client.post(
+        "/ocr/sync/upload", files=_barcode_files(), data={"doc_type": "barcode"}
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["doc_type"] == "barcode"
+    assert body["result"]["fields"]["codigo"]["value"] == "7791234567898"
+    assert body["result"]["fields"]["pais_registro"]["value"] == "Argentina"
+    assert body["result"]["engine"] == "zbar"
+    assert body["result"]["needs_review"] is False
+
+
+async def test_barcode_async_flow(client, fake_redis):
+    """Flujo completo de la App: encolar, procesar en el worker y leer el job."""
+    from app.services import queue
+    from app.worker import process_job
+
+    with patch("app.services.storage_client.upload_temp", new=AsyncMock(return_value=IMAGE_URL)):
+        r = await client.post(
+            "/ocr/scan", files=_barcode_files(), data={"doc_type": "barcode"}
+        )
+
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    task = await queue.dequeue(timeout=1)
+    with patch(
+        "app.services.image_loader.from_url",
+        new=AsyncMock(return_value=barcode_photo("779123456789")),
+    ), patch("app.services.storage_client.discard_temp", new=AsyncMock(return_value=True)):
+        await process_job(task)
+
+    state = await client.get(f"/ocr/jobs/{job_id}")
+
+    assert state.json()["status"] == JobStatus.DONE
+    assert state.json()["result"]["fields"]["codigo"]["value"] == "7791234567898"
+
+
+async def test_barcode_without_decoder_returns_503(client, fake_redis, monkeypatch):
+    """Falta `libzbar` en la imagen: es una falla local, y un 503 la distingue
+    del 502 con el que se reporta un servicio de motor remoto caído."""
+    from app.decoders import barcode as decoder
+
+    def explota(*_args, **_kwargs):
+        raise decoder.DecoderUnavailable("falta libzbar")
+
+    monkeypatch.setattr(decoder, "_pyzbar", explota)
+
+    r = await client.post(
+        "/ocr/sync/upload", files=_barcode_files(), data={"doc_type": "barcode"}
+    )
+
+    assert r.status_code == 503
+    assert "libzbar" in r.json()["detail"]
+
+
+async def test_readyz_reports_the_barcode_decoder(client, fake_redis, fake_engine):
+    fake_engine(LABEL_LINES)
+
+    r = await client.get("/ocr/readyz")
+
+    assert r.json()["checks"]["barcode"] is True
+
+
+async def test_barcode_decoder_does_not_break_readiness(client, fake_redis, fake_engine, monkeypatch):
+    """Sin decodificador el servicio sigue resolviendo etiquetas, sellos y
+    tickets: no puede quedar fuera de rotación por una dependencia de un solo
+    tipo de documento."""
+    from app.decoders import barcode as decoder
+
+    monkeypatch.setattr(decoder, "is_available", lambda: False)
+    fake_engine(LABEL_LINES)
+
+    r = await client.get("/ocr/readyz")
+
+    assert r.status_code == 200
+    assert r.json()["checks"]["barcode"] is False

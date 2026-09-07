@@ -5,7 +5,8 @@ python-dotenv
 python-jose[cryptography]      # validación JWT (igual que auth/storage)
 httpx                          # descarga de imágenes + llamadas a los motores
 python-multipart               # subida binaria (POST /ocr/scan)
-Pillow                         # sólo para validar que el binario sea una imagen
+Pillow                         # validación de imágenes + variantes del decodificador
+pyzbar                         # decodificación de códigos de barras (envoltorio de libzbar)
 redis                          # cola de trabajos + caché de resultados
 python-dateutil                # normalización de fechas (vencimiento/compra)
 rapidfuzz                      # similitud de nombres y de meses mal leídos
@@ -14,7 +15,4 @@ pytest-asyncio
 pytest-cov
 fakeredis                      # Redis en memoria para los tests
 respx                          # doble de los servicios de motor en los tests
-
-# Ni OpenCV, ni pytesseract, ni easyocr, ni PyTorch: los motores viven en
-# `ocr_service_tesseract` y `ocr_service_easyocr`, cada uno con su imagen. Este
-# servicio coordina, parsea y puntúa — no reconoce.
+python-barcode                 # genera códigos de barras reales en los tests

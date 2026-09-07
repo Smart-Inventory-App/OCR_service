@@ -25,6 +25,16 @@ class DocType(str, Enum):
     RECEIPT = "receipt"
     """Ticket, remito o factura: ítems con cantidad, fecha de compra y total."""
 
+    BARCODE = "barcode"
+    """Código de barras del envase: el identificador global del producto.
+
+    Es el único tipo que **no pasa por un motor OCR**. Un código de barras no se
+    lee reconociendo caracteres: se decodifica la simbología, y el resultado trae
+    su propio dígito verificador. Eso lo vuelve la entrada más confiable de las
+    cuatro —o falla, o acierta— y por eso el coordinador lo resuelve por su
+    cuenta en vez de delegarlo.
+    """
+
 
 class JobStatus(str, Enum):
     QUEUED = "queued"

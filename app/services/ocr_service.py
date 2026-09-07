@@ -20,9 +20,11 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.core.config import settings
+from app.decoders import barcode as barcode_decoder
 from app.engines.base import RawOCROutput
 from app.engines.factory import HybridEngine, build_engine
 from app.engines.remote import EngineUnavailable
+from app.parsers import barcode as barcode_parser
 from app.parsers import expiry, product_label, receipt, scoring
 from app.pipeline import postprocess, transform
 from app.pipeline.transform import Transform
@@ -62,6 +64,15 @@ def attempt_plan(doc_type: DocType, supports_preprocessing: bool = True) -> list
     `supports_preprocessing` lo declara cada motor: al que prepara su propia
     entrada no se le gastan variantes de filtros que va a ignorar.
     """
+    if doc_type is DocType.BARCODE:
+        # Un código de barras no se reconoce con un motor OCR, así que no hay
+        # giro ni filtros que planificar. Su escalera de variantes es otra y vive
+        # en `decoders/barcode.py`. Se falla explícito en vez de devolver el plan
+        # de etiqueta, que correría el motor sobre una foto donde no hay texto.
+        raise ValueError(
+            "`barcode` no usa motor OCR: su lectura la resuelve decoders/barcode.py"
+        )
+
     if doc_type is DocType.EXPIRY_DATE:
         return _expiry_plan(supports_preprocessing)
 
@@ -144,19 +155,25 @@ def process_sync(
     started = time.perf_counter()
     language = lang or settings.OCR_LANG
 
-    engine = build_engine(engine_name)
-
-    if isinstance(engine, HybridEngine):
-        best, attempts = _run_hybrid(engine, content, doc_type, language, today)
+    if doc_type is DocType.BARCODE:
+        # No pasa por ningún motor: se decodifica acá. `engine_name` se ignora a
+        # propósito y el resultado reporta `zbar`, para que en el banco de
+        # pruebas se vea que la lectura no la hizo el motor que se pidió.
+        best, attempts = _run_barcode(content, today)
     else:
-        best, attempts = _run_plan(
-            engine,
-            attempt_plan(doc_type, _supports_preprocessing(engine)),
-            content,
-            doc_type,
-            language,
-            today,
-        )
+        engine = build_engine(engine_name)
+
+        if isinstance(engine, HybridEngine):
+            best, attempts = _run_hybrid(engine, content, doc_type, language, today)
+        else:
+            best, attempts = _run_plan(
+                engine,
+                attempt_plan(doc_type, _supports_preprocessing(engine)),
+                content,
+                doc_type,
+                language,
+                today,
+            )
 
     best.attempts = attempts
     best.processing_ms = int((time.perf_counter() - started) * 1000)
@@ -174,6 +191,32 @@ def process_sync(
     )
 
     return best
+
+
+def _run_barcode(content: bytes, today: date | None) -> tuple[OCRResult, int]:
+    """Lectura de código de barras: decodificar y puntuar, sin motor OCR.
+
+    No hay estrategia de giro que decidir —ZBar resuelve la orientación por su
+    cuenta— ni mejor lectura que elegir entre varios intentos: un código, o
+    decodifica o no. La escalera de variantes vive en el decodificador y corta
+    en la primera que encuentra algo.
+    """
+    reading = barcode_decoder.decode(content)
+    fields = barcode_parser.parse(reading, today)
+
+    result = OCRResult(
+        fields=fields,
+        items=[],
+        document_confidence=scoring.document_confidence(fields),
+        needs_review=scoring.needs_review(fields, barcode_parser.KEY_FIELDS),
+        engine=barcode_decoder.NAME,
+        # El texto crudo son los códigos tal como los devolvió el decodificador,
+        # antes de normalizarlos: es lo que permite auditar desde el backoffice
+        # que un `0`+UPC-A o un ITF-14 convertido salieron de lo que había.
+        raw_text="\n".join(symbol.data for symbol in reading.symbols),
+    )
+
+    return result, max(reading.attempts, 1)
 
 
 def _run_hybrid(
