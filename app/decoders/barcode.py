@@ -25,21 +25,31 @@ reproduce las mediciones):
 - **No hace falta realzar el contraste.** ZBar binariza internamente. Un código
   al 18 % de contraste y otro al 30 % de brillo se decodifican directo, y pasarlos
   antes por escala de grises con autocontraste no cambia nada.
-- **Sí hace falta ampliar.** Es la única variable que mueve la aguja. Con el
-  código ocupando 200 px de ancho o más, decodifica directo; en 180 px falla
-  directo y lo recupera la ampliación al doble; en 150 px o menos no lo recupera
-  nada, porque la información ya no está en la foto.
+- **Sí hace falta ampliar** cuando el código es chico en el cuadro. Con el código
+  ocupando 200 px de ancho o más, decodifica directo; en 180 px falla directo y
+  lo recupera la ampliación al doble; en 150 px o menos no lo recupera nada,
+  porque la información ya no está en la foto.
 - **Sí ayuda enfocar, en una banda angosta.** Con un desenfoque gaussiano de
   radio 2,0 la máscara de enfoque es lo único que lo rescata. A partir de 2,6 no
   hay filtro que lo recupere.
+- **Y hace falta REDUCIR, que es lo contrario de lo que parecía.** Es el cambio
+  con más impacto medido del módulo. Sobre las 494 fotos del conjunto de prueba
+  fallaban 116 códigos; **82 de esos 116 (71 %) se decodifican con sólo agregar
+  un intento que achique la imagen**. El caso es la foto de 4080 px de un código
+  impreso grande y algo fuera de foco: ahí ampliar no aporta y la máscara de
+  enfoque tampoco, porque el desenfoque está repartido en muchos más píxeles de
+  los que cubre su radio. Al reducir, cada barra vuelve a ocupar pocos píxeles y
+  el borde entre barra y espacio se define otra vez. Una carpeta entera del
+  conjunto —100 fotos de códigos impresos— pasaba de 0/100 a 73/100 con este
+  único intento.
 
-Los cuatro umbrales están fijados como tests (`test_barcode.py::TestEscalera`),
-así que si una versión de ZBar los corre, la suite lo dice en vez de que el
-número quede viejo en este comentario.
+Los umbrales están fijados como tests (`test_barcode.py::TestEscalera`), así que
+si una versión de ZBar los corre, la suite lo dice en vez de que el número quede
+viejo en este comentario.
 
-De ahí salen los cuatro intentos, en orden de mejor apuesta y más barato
-primero. El primero resuelve el caso normal en ~150 ms sobre una foto de 12 MP;
-los demás sólo corren si el anterior no leyó nada.
+De ahí sale la escalera, en orden de mejor apuesta y más barato primero. El
+primer intento resuelve el caso normal en ~150 ms sobre una foto de 12 MP; los
+demás sólo corren si el anterior no leyó nada.
 """
 
 import io
@@ -219,14 +229,42 @@ def _variants():
     """Las variantes a probar, de la más barata a la más cara.
 
     Cada una devuelve `None` cuando no aplica, y ahí se saltea sin contarse: no
-    tiene sentido registrar como intento fallido una ampliación que nunca se hizo.
+    tiene sentido registrar como intento fallido una reducción que nunca se hizo.
+
+    Las reducciones van antes que la ampliación por dos motivos, y los dos están
+    medidos: recuperan bastante más (82 de 116 fallos contra 11) y son más
+    baratas, porque decodificar una imagen chica cuesta menos que decodificar una
+    del doble de lado.
     """
     yield "directo", lambda image: image
+
+    for width in settings.barcode_downscale_widths:
+        yield f"reducida {width}px", _downscaler(width)
+
     yield "ampliada", _upscaled
 
     if settings.BARCODE_SHARPEN_ENABLED:
         yield "enfocada", _sharpened
         yield "ampliada+enfocada", lambda image: _sharpened(_upscaled(image))
+
+
+def _downscaler(width: int):
+    """Reductor a un ancho fijo, o `None` si la imagen ya es más chica.
+
+    Se prueban varios anchos porque no hay uno que gane siempre: sobre los fallos
+    del conjunto de prueba, 2048 px recupera 43, 1600 recupera 60 y 640 recupera
+    71, pero ninguno es superconjunto de los otros —cada foto tiene su punto
+    donde las barras quedan bien definidas—. Probarlos de mayor a menor deja
+    primero el que menos información descarta.
+    """
+
+    def reduce(image: Image.Image | None) -> Image.Image | None:
+        if image is None or image.width <= width:
+            return None
+        height = max(1, int(image.height * width / image.width))
+        return image.resize((width, height), Image.LANCZOS)
+
+    return reduce
 
 
 def _upscaled(image: Image.Image | None) -> Image.Image | None:

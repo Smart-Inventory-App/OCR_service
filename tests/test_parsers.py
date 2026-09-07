@@ -589,8 +589,15 @@ def test_receipt_without_items_needs_review():
     assert result.needs_review is True
 
 
-def test_receipt_with_inferred_quantities_needs_review():
-    """Cantidad inferida (conf 0.6 < 0.85) obliga a revisión manual asistida."""
+def test_receipt_with_inferred_quantities_does_not_need_review():
+    """Una cantidad inferida no bloquea el alta.
+
+    Un ticket argentino no imprime la cantidad cuando es 1: el parser la infiere
+    y le pone 0,6 para declarar que la infirió. Exigirle el umbral por campo
+    mandaba a revisión el 100 % de los tickets reales del conjunto de prueba, con
+    los nombres leídos a 0,99 y el total al centavo. Lo que sí sigue bloqueando
+    es un nombre de ítem dudoso: sin saber qué producto es, no hay alta posible.
+    """
     output = make_output(
         ["ALMACEN", "FECHA 20/07/2026", "Aceite Girasol 3.100,00", "TOTAL 3.100,00"],
         confidence=0.99,
@@ -599,6 +606,20 @@ def test_receipt_with_inferred_quantities_needs_review():
     result = ocr_service.build_result(output, output.text, DocType.RECEIPT, TODAY)
 
     assert result.items
+    assert result.items[0].cantidad.value == 1
+    assert result.items[0].cantidad.confidence < 0.85
+    assert result.needs_review is False
+
+
+def test_receipt_with_an_unreadable_item_name_still_needs_review():
+    """La contraparte: el nombre sí es condición para el alta automática."""
+    output = make_output(
+        ["ALMACEN", "FECHA 20/07/2026", "Aceite Girasol 3.100,00", "TOTAL 3.100,00"],
+        confidence=0.45,
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, TODAY)
+
     assert result.needs_review is True
 
 
@@ -627,3 +648,178 @@ def test_build_result_for_unreadable_stamp_needs_review():
 
     assert result.fields["fecha_vencimiento"].value is None
     assert result.needs_review is True
+
+
+# ---------------------------------------------------------------------------
+# Vocabulario de farmacia
+# ---------------------------------------------------------------------------
+#
+# Faltaba entero. Sobre el conjunto de prueba las etiquetas de farmacia daban 2
+# altas automáticas sobre 27 (7 %) contra 59 % en almacén: sin una categoría
+# reconocible el parser cae a la heurística de reserva —la tipografía más
+# grande— que es justo la que confunde la marca con el nombre.
+
+@pytest.mark.parametrize(
+    "lineas, alturas, nombre, marca",
+    [
+        (["BAYASPIRINA", "IBUPROFENO 400 mg", "20 comprimidos"], [60, 30, 16],
+         "IBUPROFENO 400 mg", "BAYASPIRINA"),
+        (["GENIOL", "PARACETAMOL", "500 mg"], [58, 28, 14], "PARACETAMOL", "GENIOL"),
+        (["DERMAGLOS", "PROTECTOR SOLAR FPS 50", "200 ml"], [60, 26, 14],
+         "PROTECTOR SOLAR FPS 50", "DERMAGLOS"),
+        (["COLGATE", "CREMA DENTAL TRIPLE ACCION", "90 g"], [60, 26, 14],
+         "CREMA DENTAL TRIPLE ACCION", "COLGATE"),
+    ],
+)
+def test_pharmacy_labels_name_the_product_and_not_the_brand(lineas, alturas, nombre, marca):
+    output = make_output(lineas, confidence=0.97, heights=alturas)
+
+    fields = product_label.parse(output, output.text)
+
+    assert fields["nombre_producto"].value == nombre
+    assert fields["marca"].value == marca
+    assert fields["nombre_producto"].confidence >= 0.85
+
+
+def test_the_dosage_line_of_a_package_is_not_a_product_name():
+    """`gotas`, `polvo` y `vitaminas` quedaron fuera del vocabulario a propósito.
+
+    Aparecen en el texto de uso del envase o ya son descriptores, y como
+    categoría harían que una línea accesoria le ganara al nombre real.
+    """
+    output = make_output(
+        ["HILERET", "EDULCORANTE LIQUIDO", "8 gotas = 1 cucharadita"],
+        confidence=0.96,
+        heights=[60, 28, 12],
+    )
+
+    fields = product_label.parse(output, output.text)
+
+    assert "gotas" not in (fields["nombre_producto"].value or "").lower()
+
+
+@pytest.mark.parametrize(
+    "caso, lineas, alturas, nombre, marca",
+    [
+        # Los tres salieron de fotos reales del conjunto de prueba, con la
+        # geometría que tienen en el envase.
+        (
+            "IbuEvanol Forte",
+            ["ANALGESICO Y ANTIINFLAMATORIO HALEON", "IbuEvanol", "FORTE",
+             "RAPIDA ACCION", "Ibuprofeno 400 mg", "20 capsulas blandas"],
+            [12, 60, 34, 20, 30, 14],
+            "Ibuprofeno 400 mg", "IbuEvanol",
+        ),
+        (
+            "Sertal Compuesto",
+            ["Sertal", "Compuesto", "Antiespasmodico y analgesico",
+             "10 Comprimidos recubiertos", "Propinox Clonixinato de lisina"],
+            [60, 36, 22, 16, 14],
+            "Sertal", None,
+        ),
+        (
+            "Contractil",
+            ["Efecto FLEBOCONSTRICTOR", "Contractil", "ANTIHEMORROIDAL",
+             "CONT. 30 Capsulas", "Elea"],
+            [16, 66, 20, 12, 24],
+            "Contractil", None,
+        ),
+    ],
+)
+def test_real_pharmacy_boxes(caso, lineas, alturas, nombre, marca):
+    output = make_output(lineas, confidence=0.96, heights=alturas)
+
+    fields = product_label.parse(output, output.text)
+
+    assert fields["nombre_producto"].value == nombre, caso
+    if marca is not None:
+        assert fields["marca"].value == marca, caso
+
+
+@pytest.mark.parametrize(
+    "frase",
+    ["RAPIDA ACCION", "NUEVA FORMULA", "ANTIINFLAMATORIO", "VENTA LIBRE",
+     "ANTIESPASMODICO Y ANALGESICO"],
+)
+def test_marketing_and_effect_lines_never_become_the_product_name(frase):
+    """Sobre las fotos de farmacia estas frases estaban ganando el campo.
+
+    No nombran un producto: describen su efecto o su presentación. Van a
+    DESCRIPTORS justamente para que no compitan por el nombre.
+    """
+    output = make_output(
+        ["MARCAX", frase, "Ibuprofeno 400 mg"], confidence=0.96, heights=[60, 40, 26]
+    )
+
+    fields = product_label.parse(output, output.text)
+
+    assert fields["nombre_producto"].value == "Ibuprofeno 400 mg"
+
+
+def test_the_composition_line_does_not_beat_the_product_name():
+    """La letra chica de composición no puede ganarle al nombre.
+
+    Entre los bloques que nombran una categoría se elige el más grande, así que
+    una monodroga que sólo aparece en la línea de composición ganaría sin
+    competencia aunque midiera la mitad. Por eso esas monodrogas no están en el
+    vocabulario.
+    """
+    output = make_output(
+        ["Sertal", "Compuesto", "Propinox Clonixinato de lisina"],
+        confidence=0.96,
+        heights=[60, 36, 12],
+    )
+
+    fields = product_label.parse(output, output.text)
+
+    assert fields["nombre_producto"].value == "Sertal"
+
+
+def test_glued_descriptor_is_trimmed_from_the_name():
+    """`RAPIDA ACCION Ibuprofeno 400 mg` tiene que dar sólo la parte del nombre.
+
+    El agrupamiento por geometría pega el descriptor adelante; el recorte busca
+    el corte más tardío que todavía nombra la categoría, no el primero.
+    """
+    assert product_label._split_leading_brand("RAPIDA ACCION Ibuprofeno 400 mg") == (
+        "Ibuprofeno 400 mg",
+        "RAPIDA ACCION",
+    )
+
+
+def test_a_fiscal_receipt_date_without_a_label_is_still_trusted():
+    """El controlador fiscal imprime la fecha pegada al número de comprobante.
+
+    Sin rótulo `FECHA`, pero completa: día, mes y año de cuatro dígitos. Esa
+    forma no aparece por casualidad en un ticket, así que la penalización por
+    falta de palabra clave se afloja y el comprobante puede cargarse solo.
+    """
+    output = make_output(
+        ["DIA ARGENTINA SA",
+         "NUM.08028-00545295 22-08-2026 17:04:50 A CONSUMIDOR FINAL",
+         "PAN ARTESANO BIMBO 8909,00",
+         "TOTAL 16015.25"],
+        confidence=0.98,
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, date(2026, 9, 7))
+
+    assert result.fields["fecha_compra"].value == "2026-08-22"
+    assert result.fields["fecha_compra"].confidence >= settings.FIELD_CONFIDENCE_THRESHOLD
+    assert result.needs_review is False
+
+
+def test_an_incomplete_receipt_date_keeps_the_full_penalty():
+    """La contraparte: si la fecha viene sin año de cuatro dígitos, la duda sigue.
+
+    Sin rótulo y sin fecha completa puede ser cualquier número del ticket, así
+    que la penalización se mantiene y el documento va a revisión.
+    """
+    output = make_output(
+        ["ALMACEN", "08/2026", "Aceite Girasol 3.100,00", "TOTAL 3.100,00"],
+        confidence=0.98,
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, date(2026, 9, 7))
+
+    assert result.fields["fecha_compra"].confidence < settings.FIELD_CONFIDENCE_THRESHOLD

@@ -584,3 +584,33 @@ async def test_barcode_decoder_does_not_break_readiness(client, fake_redis, fake
 
     assert r.status_code == 200
     assert r.json()["checks"]["barcode"] is False
+
+
+async def test_truncated_image_is_rejected_with_400(client, fake_redis):
+    """Una imagen truncada tiene la cabecera bien y los datos incompletos.
+
+    Antes pasaba la validación —que sólo miraba la cabecera— y reventaba más
+    adelante: 500 con `barcode` y 502 con `product_label`. Ninguno de los dos
+    describe lo que pasó, que es que el archivo llegó mal.
+    """
+    entera = barcode_photo("779123456789")
+    truncada = entera[: len(entera) // 4]
+
+    for doc_type in ("barcode", "product_label", "receipt"):
+        r = await client.post(
+            "/ocr/sync/upload",
+            files={"file": ("rota.png", truncada, "image/png")},
+            data={"doc_type": doc_type},
+        )
+
+        assert r.status_code == 400, doc_type
+        assert "no es una imagen válida" in r.json()["detail"]
+
+
+async def test_a_whole_image_is_still_accepted(client, fake_redis):
+    """La contraparte: verificar el archivo entero no rechaza uno bueno."""
+    r = await client.post(
+        "/ocr/sync/upload", files=_barcode_files(), data={"doc_type": "barcode"}
+    )
+
+    assert r.status_code == 200

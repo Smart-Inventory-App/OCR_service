@@ -50,16 +50,30 @@ async def from_url(url: str) -> bytes:
 
 
 def validate(content: bytes) -> tuple[int, int]:
-    """Comprueba que el binario sea una imagen y devuelve su tamaño en píxeles.
+    """Comprueba que el binario sea una imagen decodificable y devuelve su tamaño.
 
-    `Image.open` sólo lee la cabecera: no descomprime el archivo entero, así que
-    validar es barato aunque la foto sea grande.
+    `Image.open` sólo lee la cabecera, así que por sí solo deja pasar un archivo
+    **truncado**: la cabecera está bien y el resto de los bytes no llegaron. Eso
+    no se notaba hasta que alguien intentaba decodificar la imagen de verdad, y
+    entonces la falla salía como un 500 en vez del 400 que corresponde a un
+    archivo mal subido.
+
+    Por eso además de abrirla se fuerza a Pillow a recorrer los datos con
+    `verify()`, que detecta el truncamiento sin descomprimir la imagen a memoria.
+    Como `verify()` deja el archivo inutilizable, se abre dos veces: una para
+    medir y otra para verificar. Las dos son operaciones de cabecera y flujo, no
+    de decodificación completa.
     """
     try:
         with Image.open(io.BytesIO(content)) as image:
-            return image.size
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+            size = image.size
+
+        with Image.open(io.BytesIO(content)) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
         raise ImageLoadError("El archivo no es una imagen válida") from exc
+
+    return size
 
 
 def fingerprint(content: bytes) -> str:

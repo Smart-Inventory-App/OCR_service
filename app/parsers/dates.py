@@ -122,6 +122,25 @@ _PATTERNS: list[tuple[re.Pattern, tuple[str, ...]]] = [
 # puntos leído con una letra mal.
 _FUZZY_MONTH_PATTERN = re.compile(r"\b(\d{1,2})[\s/.\-]*([A-Za-z0-9]{3})[\s/.\-]*(\d{2,4})\b")
 
+# Mes/año con año de DOS dígitos: `VTO 08/28`, `VTO08/28`, `CONS.PREF. 12/27`.
+#
+# Es el formato más frecuente en el envase argentino y estaba sin cubrir: los
+# patrones de arriba sólo aceptan mes/año con año de cuatro dígitos. La razón de
+# la exclusión era buena —`08/28` suelto es indistinguible de un día/mes— y por
+# eso acá se exige que **lo anuncie una palabra de vencimiento**. Con `VTO`
+# adelante no hay ambigüedad posible: nadie imprime un día y un mes después de
+# «vence».
+#
+# La palabra clave queda fuera del tramo que se reporta como `matched_text`
+# (ver `_build_keyed_month_year`), para que el resto del scoring siga viendo la
+# fecha y no la etiqueta.
+_KEYWORD_ALT = r"vto|vence|vencimiento|cons\.?\s*pref\.?|consumir\s+preferentemente|best\s+before|v[t1i]0|vio"
+
+_KEYED_MONTH_YEAR = re.compile(
+    rf"\b(?:{_KEYWORD_ALT})[^0-9A-Za-z]{{0,4}}(\d{{1,2}})\s*[/\-.]\s*(\d{{2}})(?!\d)",
+    re.IGNORECASE,
+)
+
 
 def find_dates(text: str) -> list[ParsedDate]:
     """Todas las fechas válidas del texto, en orden de aparición."""
@@ -130,6 +149,9 @@ def find_dates(text: str) -> list[ParsedDate]:
     for pattern, groups in _PATTERNS:
         for match in pattern.finditer(text):
             _append(found, _build_date(match, groups))
+
+    for match in _KEYED_MONTH_YEAR.finditer(text):
+        _append(found, _build_keyed_month_year(match))
 
     for match in _FUZZY_MONTH_PATTERN.finditer(text):
         _append(found, _build_fuzzy_date(match))
@@ -263,6 +285,34 @@ def _build_date(match: re.Match, groups: tuple[str, ...]) -> ParsedDate | None:
         return None
 
     return _assemble(match, _expand_year(parts["y"]), month, parts.get("d"))
+
+
+def _build_keyed_month_year(match: re.Match) -> ParsedDate | None:
+    """`VTO 08/28` → 2028-08-31, con el día inferido al cierre del mes.
+
+    `start` y `matched_text` apuntan a la fecha y no al match completo, que
+    incluye la palabra clave. Es lo que permite que `has_keyword_before` la
+    encuentre mirando hacia atrás y que la confianza no se penalice como si la
+    fecha hubiera aparecido suelta — que es justamente lo contrario de lo que
+    pasó acá.
+    """
+    month = int(match.group(1))
+    if not 1 <= month <= 12:
+        return None
+
+    year = _expand_year(match.group(2))
+
+    try:
+        value = date(year, month, _last_day_of_month(year, month))
+    except ValueError:
+        return None
+
+    return ParsedDate(
+        value=value,
+        matched_text=match.string[match.start(1) : match.end(2)],
+        start=match.start(1),
+        day_precision=False,
+    )
 
 
 def _build_fuzzy_date(match: re.Match) -> ParsedDate | None:

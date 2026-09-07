@@ -65,7 +65,59 @@ class TestEscalera:
 
         assert [s.data for s in result.symbols] == [EAN13_AR]
         assert result.variant == "ampliada"
-        assert result.attempts == 2
+        # No es el primer intento: el directo falló y las reducciones tampoco
+        # sirven acá, porque el problema es que falta resolución, no que sobre.
+        assert result.attempts > 1
+
+    def test_codigo_grande_y_desenfocado_lo_recupera_la_reduccion(self):
+        """El caso que hizo fallar 100 de 100 fotos de códigos impresos.
+
+        Un código enorme dentro de un cuadro enorme y algo fuera de foco: ampliar
+        no aporta y la máscara de enfoque tampoco, porque el desenfoque está
+        repartido en muchos más píxeles de los que cubre su radio. Reducir vuelve
+        a definir el borde entre barra y espacio.
+        """
+        photo = barcode_photo(EAN13_AR_BODY, width=3000, blur=12, canvas=(4000, 2400))
+
+        result = decoder.decode(photo)
+
+        assert [s.data for s in result.symbols] == [EAN13_AR]
+        assert result.variant.startswith("reducida")
+
+    def test_sin_reducciones_ese_codigo_no_se_lee(self, monkeypatch):
+        """La contraparte del test anterior: es la reducción y no otra cosa.
+
+        Sin ella, la misma foto agota la escalera sin leer nada — que es
+        exactamente lo que hacía el servicio antes de agregarla.
+        """
+        monkeypatch.setattr(settings, "BARCODE_DOWNSCALE_WIDTHS_STR", "")
+
+        photo = barcode_photo(EAN13_AR_BODY, width=3000, blur=12, canvas=(4000, 2400))
+
+        assert decoder.decode(photo).found is False
+
+    def test_las_reducciones_se_prueban_antes_que_la_ampliacion(self):
+        """Orden de la escalera: primero lo que más recupera y menos cuesta.
+
+        Las reducciones resuelven 82 de los 116 fallos medidos contra 11 de la
+        ampliación, y además decodificar una imagen chica cuesta menos que una
+        del doble de lado.
+        """
+        nombres = [name for name, _ in decoder._variants()]
+
+        assert nombres[0] == "directo"
+        assert nombres.index("reducida 2048px") < nombres.index("ampliada")
+        assert [n for n in nombres if n.startswith("reducida")] == [
+            "reducida 2048px", "reducida 1600px", "reducida 1200px",
+            "reducida 900px", "reducida 640px",
+        ]
+
+    def test_una_reduccion_no_agranda_una_imagen_chica(self):
+        """Reducir a 2048 px una foto de 1200 no tiene sentido: se saltea."""
+        reducir = decoder._downscaler(2048)
+
+        assert reducir(Image.new("L", (1200, 800))) is None
+        assert reducir(Image.new("L", (4000, 2400))).width == 2048
 
     def test_codigo_desenfocado_lo_recupera_el_enfoque(self):
         """Mismo criterio para la máscara de enfoque: con desenfoque 2,0 es la
@@ -82,7 +134,9 @@ class TestEscalera:
 
         assert result.symbols == []
         assert result.found is False
-        assert result.attempts == 4
+        # Se agotó la escalera entera: directo, las reducciones que aplican, la
+        # ampliación y las dos con enfoque.
+        assert result.attempts == 6
 
     def test_desenfoque_severo_no_se_inventa(self):
         result = decoder.decode(barcode_photo(EAN13_AR_BODY, width=420, blur=3.2))
@@ -105,8 +159,13 @@ class TestEscalera:
 
     def test_la_ampliacion_se_saltea_si_se_pasa_del_tope_de_pixeles(self, monkeypatch):
         """El tope acota el pico de memoria. Cuando aplica, la variante no corre
-        y tampoco se cuenta como intento fallido: no se intentó."""
+        y tampoco se cuenta como intento fallido: no se intentó.
+
+        Se apagan las reducciones y el enfoque para dejar sola a la ampliación:
+        si no, no se podría distinguir "no se intentó" de "se intentó otra cosa".
+        """
         monkeypatch.setattr(settings, "BARCODE_MAX_PIXELS", 1000)
+        monkeypatch.setattr(settings, "BARCODE_DOWNSCALE_WIDTHS_STR", "")
         monkeypatch.setattr(settings, "BARCODE_SHARPEN_ENABLED", False)
 
         result = decoder.decode(barcode_photo(EAN13_AR_BODY, width=120))
@@ -120,6 +179,7 @@ class TestEscalera:
     def test_ampliacion_desactivada(self, monkeypatch):
         """Con factor 1 la variante no aporta nada y no se corre."""
         monkeypatch.setattr(settings, "BARCODE_UPSCALE_FACTOR", 1)
+        monkeypatch.setattr(settings, "BARCODE_DOWNSCALE_WIDTHS_STR", "")
         monkeypatch.setattr(settings, "BARCODE_SHARPEN_ENABLED", False)
 
         result = decoder.decode(barcode_photo(EAN13_AR_BODY, width=180))

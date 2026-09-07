@@ -77,28 +77,53 @@ def attempt_plan(doc_type: DocType, supports_preprocessing: bool = True) -> list
         return _expiry_plan(supports_preprocessing)
 
     if doc_type is DocType.RECEIPT:
+        # El ticket se fotografía apoyado y de frente: girarlo no aporta.
         return _single_page_plan(supports_preprocessing, primary_layout="block")
 
-    return _single_page_plan(supports_preprocessing, primary_layout="sparse")
+    # La etiqueta sí puede venir girada, al contrario de lo que se suponía. Sobre
+    # el conjunto de prueba, las mismas 16 fotos giradas un cuarto de vuelta
+    # daban un nombre distinto en los 16 casos, y el alta automática caía de 9 a
+    # 4. Los giros van al final del plan, así que la foto derecha no los paga.
+    rotations = ROTATIONS if settings.LABEL_ROTATION_SEARCH_ENABLED else (0,)
+
+    return _single_page_plan(supports_preprocessing, "sparse", rotations)
 
 
-def _single_page_plan(supports_preprocessing: bool, primary_layout: str) -> list[Attempt]:
-    """Etiquetas y tickets: la foto viene derecha, lo que se varía son filtros."""
+def _single_page_plan(
+    supports_preprocessing: bool,
+    primary_layout: str,
+    rotations: tuple[int, ...] = (0,),
+) -> list[Attempt]:
+    """Etiquetas y tickets: se varían los filtros y, al final, la orientación.
+
+    `rotations` va **después** de todas las variantes de filtros y no antes: el
+    plan corta en cuanto una lectura alcanza `RETRY_THRESHOLD`, así que una foto
+    derecha —el caso normal— nunca llega a pagar los giros. Sólo cuando la
+    lectura a 0° no sirve se prueba girar, que es exactamente cuando conviene.
+    """
     base = transform.label()
 
     if not supports_preprocessing:
-        return [Attempt(transform.geometric(), primary_layout)]
+        return [Attempt(transform.geometric().turned(deg), primary_layout) for deg in rotations]
 
     if not settings.RETRY_ENABLED:
         return [Attempt(base, primary_layout)]
 
-    return [
+    plan = [
         Attempt(base, primary_layout),
         # Segmentación automática: rinde mejor en fotos con fondo y objetos.
         Attempt(base, "auto"),
         # Binarizada con Otsu: ayuda en envases de alto contraste.
         Attempt(base.binarized(transform.OTSU), "block"),
     ]
+
+    plan += [
+        Attempt(base.turned(degrees), primary_layout)
+        for degrees in rotations
+        if degrees != 0
+    ]
+
+    return plan
 
 
 def _expiry_plan(supports_preprocessing: bool) -> list[Attempt]:
@@ -263,13 +288,26 @@ def _run_hybrid(
     fallback_plan = attempt_plan(doc_type, _supports_preprocessing(hybrid.fallback))
 
     # Si el principal reconoció algo, su orientación ya es información buena y le
-    # ahorra al respaldo probar las otras tres. Si no reconoció nada, esa
-    # información no existe y hay que dejarlo buscar.
+    # ahorra al respaldo probar las otras tres.
     if primary_result.document_confidence > 0:
         fallback_plan = [
             Attempt(attempt.transform.turned(primary_result.rotation), attempt.layout)
             for attempt in fallback_plan[:1]
         ]
+    else:
+        # El principal no reconoció nada, así que no hay orientación que
+        # aprovechar y habría que dejar buscar al respaldo. Pero es el motor más
+        # caro y este es el peor caso: una inferencia por orientación sobre la
+        # imagen que ya venció al motor barato. Medido, es el camino que agota la
+        # memoria del contenedor.
+        #
+        # Se acota por ORIENTACIÓN y no por cantidad de intentos: cortar la lista
+        # a secas dejaría dos variantes de filtro del mismo giro, que es
+        # justamente lo que no hace falta. `ROTATIONS` está ordenado por
+        # rendimiento, así que las primeras son la foto tal como vino y el cuarto
+        # de vuelta con que llega el sello.
+        permitidas = set(ROTATIONS[: settings.HYBRID_FALLBACK_MAX_ROTATIONS])
+        fallback_plan = [a for a in fallback_plan if a.rotation in permitidas]
 
     fallback_result, fallback_attempts = _run_plan(
         hybrid.fallback, fallback_plan, content, doc_type, lang, today
@@ -378,8 +416,18 @@ def _parse(
 def _items_need_review(items: list[ReceiptItem], doc_type: DocType) -> bool:
     """En un ticket, la revisión también se dispara por los ítems.
 
-    Un comprobante del que no se extrajo ningún ítem, o alguno de cuyos ítems no
-    alcanza el umbral por campo, no sirve para cargar inventario sin confirmación.
+    Un comprobante del que no se extrajo ningún ítem no sirve para cargar
+    inventario sin confirmación. Lo mismo un ítem cuyo **nombre** no se leyó con
+    confianza: sin saber qué producto es, la línea no se puede dar de alta.
+
+    La **cantidad no se exige**, y es un cambio que salió de medir. Un ticket
+    argentino no imprime la cantidad cuando es 1: el parser la infiere y le pone
+    0,6 de confianza justamente para declarar que la infirió. Exigirle 0,85
+    mandaba a revisión manual el 100 % de los tickets reales del conjunto de
+    prueba —los tres, con los nombres leídos entre 0,98 y 0,99 y el total al
+    centavo— por un dato que el parser acierta casi siempre y que el usuario
+    corrige de un toque si hace falta. Bloquear el alta por eso no protegía de
+    nada; sólo garantizaba que la carga por ticket nunca fuera automática.
     """
     if doc_type is not DocType.RECEIPT:
         return False
@@ -389,10 +437,7 @@ def _items_need_review(items: list[ReceiptItem], doc_type: DocType) -> bool:
 
     threshold = settings.FIELD_CONFIDENCE_THRESHOLD
 
-    return any(
-        item.nombre_producto.confidence < threshold or item.cantidad.confidence < threshold
-        for item in items
-    )
+    return any(item.nombre_producto.confidence < threshold for item in items)
 
 
 def _supports_preprocessing(engine) -> bool:

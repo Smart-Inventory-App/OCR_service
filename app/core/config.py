@@ -61,6 +61,27 @@ class Settings(BaseSettings):
     # revisión manual igual.
     HYBRID_FALLBACK_ENGINE: str = "paddleocr"
 
+    # Tope de ORIENTACIONES que se le conceden al motor de respaldo cuando el
+    # principal no reconoció nada y por lo tanto no hay un giro conocido que
+    # pasarle.
+    #
+    # Sin tope, ese caso —el peor— le pide al motor MÁS caro una inferencia por
+    # cada orientación, y es exactamente el camino que agota la memoria cuando el
+    # entorno va justo: sobre los sellos del conjunto de prueba, con 1,9 GB
+    # repartidos entre seis contenedores, PaddleOCR acumuló más de 90 reinicios
+    # por OOM del kernel.
+    #
+    # **El default son las cuatro**, es decir, sin recorte: bajarlo cuesta
+    # lecturas reales y eso no puede pasar en silencio. Medido sobre este mismo
+    # conjunto, ponerlo en 2 perdió 6 sellos que PaddleOCR sí leía —todos en los
+    # giros que quedaron afuera— a cambio de que la corrida terminara en un
+    # tercio del tiempo y sin quedarse sin memoria.
+    #
+    # O sea: es una perilla para entornos apretados, no una mejora. Si hay que
+    # bajarla, el orden de `ROTATIONS` deja primero las que más rinden —la foto
+    # tal como vino y el cuarto de vuelta con que llega el sello—.
+    HYBRID_FALLBACK_MAX_ROTATIONS: int = 4
+
     # ── Estrategia de intentos (la decide este servicio, no los motores) ───────
     # Ante una lectura pobre se prueban otras variantes de preparación y se
     # conserva la de mayor confianza.
@@ -71,6 +92,13 @@ class Settings(BaseSettings):
     # y llegan giradas un cuarto de vuelta. Se prueban las cuatro orientaciones y
     # se conserva la que mejor lee.
     ROTATION_SEARCH_ENABLED: bool = True
+
+    # La etiqueta también puede venir girada. Se suponía que no —"la foto de
+    # etiqueta viene derecha"— y el conjunto de prueba mostró lo contrario: las
+    # mismas 16 fotos giradas un cuarto de vuelta daban un nombre distinto en los
+    # 16 casos. Los giros se prueban al final del plan, después de las variantes
+    # de filtros, así que la foto derecha sigue resolviéndose en un intento.
+    LABEL_ROTATION_SEARCH_ENABLED: bool = True
 
     # Preparación de la imagen para el escaneo de etiquetas y tickets.
     PREPROCESS_GRAYSCALE: bool = True
@@ -102,9 +130,20 @@ class Settings(BaseSettings):
     # búsqueda de orientación —ZBar recorre la imagen en varias direcciones por
     # su cuenta— ni realce de contraste —binariza internamente—. Lo único que
     # mueve la aguja es la resolución, y el enfoque en una banda angosta.
+    BARCODE_DOWNSCALE_WIDTHS_STR: str = "2048,1600,1200,900,640"
+    """Anchos a los que se prueba reducir la imagen, de mayor a menor.
+
+    Es el intento que más lecturas recupera de todo el módulo: sobre el conjunto
+    de prueba resuelve 82 de los 116 códigos que fallaban. Son varios anchos
+    porque ninguno domina a los otros —2048 px recupera 43, 1600 recupera 60 y
+    640 recupera 71, y no son subconjuntos—, así que se recorren de mayor a menor
+    para descartar lo menos posible antes de tener que descartar más.
+    """
+
     BARCODE_UPSCALE_FACTOR: int = 2
-    """Ampliación del segundo intento. Medido: recupera la banda de ~180 a ~264
-    px de ancho de código, que falla en el intento directo."""
+    """Ampliación para el caso contrario: el código chico dentro del cuadro.
+    Medido: recupera la banda de ~180 a ~200 px de ancho de código, que falla en
+    el intento directo."""
 
     BARCODE_SHARPEN_ENABLED: bool = True
     """Máscara de enfoque para el desenfoque leve de una foto a pulso."""
@@ -121,6 +160,16 @@ class Settings(BaseSettings):
     @property
     def ALLOWED_ORIGINS(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS_STR.split(",") if o.strip()]
+
+    @property
+    def barcode_downscale_widths(self) -> list[int]:
+        """Los anchos de reducción ya parseados, ordenados de mayor a menor."""
+        widths = {
+            int(piece)
+            for piece in self.BARCODE_DOWNSCALE_WIDTHS_STR.split(",")
+            if piece.strip().isdigit() and int(piece) > 0
+        }
+        return sorted(widths, reverse=True)
 
 
 settings = Settings()

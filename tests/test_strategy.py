@@ -28,12 +28,37 @@ STAMP = ["VTO 15/08/2027"]
 # Planes de intentos
 # ---------------------------------------------------------------------------
 
-def test_label_plan_varies_filters_but_not_orientation():
-    """Una etiqueta se fotografía derecha: girarla sería gastar intentos."""
+def test_label_plan_tries_filters_first_and_rotations_last():
+    """La etiqueta prueba filtros y, sólo después, orientaciones.
+
+    Se suponía que una etiqueta se fotografía siempre derecha. El conjunto de
+    prueba mostró que no: las mismas 16 fotos giradas un cuarto de vuelta daban
+    un nombre distinto en los 16 casos. Ahora se giran, pero al final del plan,
+    así que la foto derecha —el caso normal— corta antes de pagarlos.
+    """
     plan = ocr_service.attempt_plan(DocType.PRODUCT_LABEL, supports_preprocessing=True)
 
+    rotations = [attempt.rotation for attempt in plan]
+
+    assert rotations[0] == 0
+    assert set(rotations) == {0, 90, 180, 270}
+    # Ningún giro antes de haber agotado las variantes de filtros a 0°.
+    assert rotations.index(90) > max(
+        index for index, degrees in enumerate(rotations) if degrees == 0
+    )
+
+
+def test_label_rotations_can_be_switched_off():
+    from app.core.config import settings
+
+    original = settings.LABEL_ROTATION_SEARCH_ENABLED
+    settings.LABEL_ROTATION_SEARCH_ENABLED = False
+    try:
+        plan = ocr_service.attempt_plan(DocType.PRODUCT_LABEL, supports_preprocessing=True)
+    finally:
+        settings.LABEL_ROTATION_SEARCH_ENABLED = original
+
     assert {attempt.rotation for attempt in plan} == {0}
-    assert len(plan) > 1
 
 
 def test_expiry_plan_searches_all_four_orientations():
@@ -65,10 +90,16 @@ def test_a_self_preparing_engine_gets_one_attempt_per_orientation():
     assert all(attempt.transform.binarize == transform.NONE for attempt in plan)
 
 
-def test_a_self_preparing_engine_gets_a_single_attempt_on_a_label():
+def test_a_self_preparing_engine_gets_one_attempt_per_orientation_on_a_label():
+    """Al motor que prepara su propia entrada no se le varían los filtros.
+
+    Lo que sí se le sigue variando es la orientación, que es geometría y no
+    filtrado: ningún motor lee texto girado 90°, prepare o no su entrada.
+    """
     plan = ocr_service.attempt_plan(DocType.PRODUCT_LABEL, supports_preprocessing=False)
 
-    assert len(plan) == 1
+    assert [attempt.rotation for attempt in plan] == [0, 90, 270, 180]
+    assert {attempt.transform.binarize for attempt in plan} == {"none"}
 
 
 def test_the_stamp_asks_for_more_resolution_than_a_label():
@@ -227,8 +258,18 @@ def test_hybrid_reuses_the_orientation_found_by_the_cheap_engine(monkeypatch):
     assert len(fallback.calls) == 1
 
 
-def test_hybrid_lets_the_fallback_search_when_the_primary_read_nothing(monkeypatch):
-    """Sin lectura del principal no hay orientación que heredar: se busca de nuevo."""
+def test_hybrid_caps_the_fallback_when_the_primary_read_nothing(monkeypatch):
+    """Sin lectura del principal no hay orientación que heredar, pero tampoco se
+    le regalan al motor caro las cuatro.
+
+    Antes se le concedía el plan entero —una inferencia por orientación— y es el
+    camino que agota la memoria: sobre los sellos del conjunto de prueba el
+    contenedor de PaddleOCR acumuló más de 90 reinicios por OOM y se perdieron
+    19 mediciones. Se acota a las primeras orientaciones del orden, que son la
+    foto tal como vino y el cuarto de vuelta con que llega el sello.
+    """
+    from app.core.config import settings
+
     primary = FakeEngine(["...."], confidence=0.05, name="barato")
     # También el respaldo lee mal, para que agote su plan y se vea cuántos
     # intentos le concedió el coordinador.
@@ -237,7 +278,9 @@ def test_hybrid_lets_the_fallback_search_when_the_primary_read_nothing(monkeypat
 
     ocr_service.process_sync(b"imagen", DocType.EXPIRY_DATE, today=TODAY)
 
-    assert {call["rotate"] for call in fallback.calls} == {0, 90, 180, 270}
+    giros = {call["rotate"] for call in fallback.calls}
+
+    assert giros == set(ocr_service.ROTATIONS[: settings.HYBRID_FALLBACK_MAX_ROTATIONS])
 
 
 def test_hybrid_counts_the_attempts_of_both_engines(monkeypatch):
@@ -248,3 +291,40 @@ def test_hybrid_counts_the_attempts_of_both_engines(monkeypatch):
     result = ocr_service.process_sync(b"imagen", DocType.PRODUCT_LABEL, today=TODAY)
 
     assert result.attempts == len(primary.calls) + len(fallback.calls)
+
+
+def test_the_fallback_engine_is_capped_when_the_primary_read_nothing():
+    """El motor caro no recibe una corrida por orientación.
+
+    Cuando el principal no reconoce nada no hay orientación conocida que
+    pasarle al respaldo, y sin tope ese caso —el peor— le pide al motor más
+    caro una inferencia por cada giro. Medido sobre los sellos del conjunto de
+    prueba, es el camino que agota la memoria del contenedor.
+    """
+    from app.core.config import settings
+    from app.engines.factory import HybridEngine
+    from tests.conftest import FakeEngine
+
+    primary = FakeEngine(["nada legible"], confidence=0.0)
+    fallback = FakeEngine(["VTO 15/08/2027"], confidence=0.99,
+                          supports_preprocessing=False)
+    hybrid = HybridEngine(primary=primary, fallback=fallback, threshold=0.7)
+
+    ocr_service._run_hybrid(hybrid, b"x", DocType.EXPIRY_DATE, "spa", None)
+
+    assert len(fallback.calls) <= settings.HYBRID_FALLBACK_MAX_ROTATIONS
+
+
+def test_the_fallback_gets_a_single_run_when_the_primary_found_the_orientation():
+    """Si el principal leyó algo, su giro es información y basta una corrida."""
+    from app.engines.factory import HybridEngine
+    from tests.conftest import FakeEngine
+
+    primary = FakeEngine(["VTO 15/08/2027"], confidence=0.60)
+    fallback = FakeEngine(["VTO 15/08/2027"], confidence=0.99,
+                          supports_preprocessing=False)
+    hybrid = HybridEngine(primary=primary, fallback=fallback, threshold=0.7)
+
+    ocr_service._run_hybrid(hybrid, b"x", DocType.EXPIRY_DATE, "spa", None)
+
+    assert len(fallback.calls) == 1

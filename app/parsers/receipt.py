@@ -93,8 +93,20 @@ def _parse_purchase_date(output: RawOCROutput, text: str, today: date) -> Extrac
         return scoring.missing()
 
     confidence = 1.0
+
     if not dates.has_keyword_before(text, parsed, dates.PURCHASE_KEYWORDS):
-        confidence *= 0.85
+        # Un comprobante fiscal argentino casi nunca rotula la fecha: el
+        # controlador la imprime pegada al número de comprobante, como en
+        # `NUM.08028-00545295 22-08-2026 17:04:50`. Penalizar eso igual que a un
+        # número suelto en un envase es lo que dejaba a los tickets bien leídos
+        # justo por debajo del umbral de alta automática.
+        #
+        # Cuando la fecha está **completa** —día, mes y año de cuatro dígitos— la
+        # duda que queda es chica: ese formato no aparece por casualidad en un
+        # ticket. Cuando viene incompleta, la penalización sigue siendo la de
+        # antes, porque ahí sí puede ser cualquier cosa.
+        confidence *= 0.95 if _is_complete(parsed) else 0.85
+
     if not parsed.day_precision:
         confidence *= 0.8
     # Una compra no puede ser futura: si lo es, se leyó mal.
@@ -106,6 +118,11 @@ def _parse_purchase_date(output: RawOCROutput, text: str, today: date) -> Extrac
         engine_conf=scoring.confidence_of_snippet(output, parsed.matched_text),
         parser_conf=confidence,
     )
+
+
+def _is_complete(parsed: dates.ParsedDate) -> bool:
+    """Día, mes y año de cuatro dígitos: la forma que imprime un fiscal."""
+    return parsed.day_precision and bool(re.search(r"\d{4}", parsed.matched_text))
 
 
 def _parse_total(lines: list[list[OCRWord]]) -> ExtractedField:

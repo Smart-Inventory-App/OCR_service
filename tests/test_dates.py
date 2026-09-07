@@ -126,3 +126,65 @@ def test_overlapping_patterns_do_not_duplicate():
 
     assert len(found) == 1
     assert found[0].iso == "2027-08-15"
+
+
+# ---------------------------------------------------------------------------
+# Mes/año con año de dos dígitos — `VTO 08/28`
+# ---------------------------------------------------------------------------
+#
+# Es el formato más frecuente en el envase argentino y no estaba cubierto: los
+# patrones sólo aceptaban mes/año con año de cuatro dígitos. Se acepta **sólo**
+# cuando lo anuncia una palabra de vencimiento, porque `08/28` suelto es
+# indistinguible de un día y un mes.
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("VTO 08/28", "2028-08-31"),
+        # Pegado, que es como sale del motor sobre un sello real.
+        ("1L6217 07:45-VTO08/28", "2028-08-31"),
+        ("CONS.PREF. 12/27", "2027-12-31"),
+        ("VENCE 03/29", "2029-03-31"),
+        ("L: 1234 VTO 11/26", "2026-11-30"),
+        ("Vto: 01/30", "2030-01-31"),
+        # `VIO` es como el motor lee `VTO` con trazo fino: la T y la I son dos
+        # palos verticales.
+        ("VIO 06/27", "2027-06-30"),
+    ],
+)
+def test_month_year_with_two_digit_year_needs_a_keyword(texto, esperado):
+    assert dates.find_expiry_date(texto, TODAY).iso == esperado
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        # Sin palabra clave no se acepta: sería indistinguible de un día/mes.
+        "Precio 08/28",
+        "Lote 4523 08/28",
+        # Mes inválido: 15 no es un mes, así que esto es un día y un mes.
+        "VTO 15/08",
+        # Año fuera de la ventana de plausibilidad.
+        "VTO 08/99",
+    ],
+)
+def test_month_year_without_a_keyword_is_not_a_date(texto):
+    assert dates.find_expiry_date(texto, TODAY) is None
+
+
+def test_the_keyword_still_counts_as_announced():
+    """El tramo reportado es la fecha, no la palabra clave.
+
+    Si `matched_text` incluyera el `VTO`, la posición quedaría antes de él y
+    `has_keyword_before` no lo encontraría: la fecha se penalizaría por venir
+    suelta cuando en realidad es el único caso en que se exige que no lo esté.
+    """
+    parsed = dates.find_expiry_date("VTO 08/28", TODAY)
+
+    assert parsed.matched_text == "08/28"
+    assert dates.has_keyword_before("VTO 08/28", parsed, dates.EXPIRY_KEYWORDS) is True
+
+
+def test_production_date_does_not_win_over_expiry_in_two_digit_format():
+    """`ELAB 05/26  VTO 05/27` tiene que dar el vencimiento, no la elaboración."""
+    assert dates.find_expiry_date("ELAB 05/26 VTO 05/27", TODAY).iso == "2027-05-31"
