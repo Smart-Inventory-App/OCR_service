@@ -2,8 +2,8 @@
 
 Es la pieza que reemplaza a los adaptadores que antes ejecutaban Tesseract y
 EasyOCR dentro de este proceso. Desde afuera se comporta igual —cumple
-`OCREngine`— pero por dentro delega en `ocr_service_tesseract` u
-`ocr_service_easyocr`.
+`OCREngine`— pero por dentro delega en `ocr_service_tesseract`,
+`ocr_service_easyocr` u `ocr_service_paddleocr`, que hablan el mismo contrato.
 
 Todo lo que decide *qué* pedirle al motor (giro, filtros, segmentación, cuántos
 intentos) sigue estando de este lado. El servicio remoto sólo ejecuta.

@@ -19,8 +19,10 @@ total y cuánto de esa latencia es el motor.
 repositorio. `bench/dataset/` es el conjunto de trabajo: está vacío en el
 repositorio y es donde se colocan las imágenes propias (ver el README).
 
-Requiere que los servicios de motor estén levantados (`ocr_service_tesseract` y
-`ocr_service_easyocr`). El consumo de memoria ya no se mide desde acá: cada motor
+Requiere que estén levantados los servicios de los motores que se evalúen
+(`ocr_service_tesseract`, `ocr_service_easyocr` y `ocr_service_paddleocr`); el
+que no responda se reporta como no disponible y se omite, sin tumbar la corrida.
+El consumo de memoria ya no se mide desde acá: cada motor
 es un contenedor aparte y su memoria se lee con `docker stats`, que es la medida
 que importa para decidir el despliegue.
 """
@@ -44,7 +46,12 @@ from app.services import ocr_service
 DEFAULT_DATASET = Path("bench/dataset")
 GROUND_TRUTH_FILE = "ground_truth.json"
 
-CANDIDATE_ENGINES = ("tesseract", "easyocr", "hybrid")
+# Los motores que se evalúan por defecto: los tres que nombra la propuesta más
+# el híbrido. Se derivan de la factory y no se listan a mano, porque una lista
+# propia se desincroniza en cuanto se agrega un motor —y eso ya pasó: PaddleOCR
+# quedó fuera del default y el benchmark dejó de medirlo salvo que se lo pidiera
+# explícitamente, mientras el README seguía reportando sus números.
+CANDIDATE_ENGINES = factory.VALID_ENGINES
 
 # Un nombre de producto se da por correcto si coincide con esta similitud: el
 # motor puede equivocarse en un carácter sin que el campo deje de servir.
@@ -374,8 +381,9 @@ def main() -> int:
     ground_truth = load_ground_truth(dataset)
 
     print(f"Dataset: {dataset} ({len(ground_truth)} documentos)")
-    print(f"Tesseract: {settings.TESSERACT_SERVICE_URL}")
-    print(f"EasyOCR:   {settings.EASYOCR_SERVICE_URL}\n")
+    for name in factory.CONCRETE_ENGINES:
+        print(f"{name + ':':<12}{factory.build_engine(name).base_url}")
+    print()
 
     reports = []
     for engine_name in args.engines:

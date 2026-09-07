@@ -71,7 +71,7 @@ class OCRJobRequest(BaseModel):
     engine: str | None = Field(
         default=None,
         description=(
-            "Motor a usar: `tesseract`, `easyocr` o `hybrid`. "
+            "Motor a usar: `tesseract`, `easyocr`, `paddleocr` o `hybrid`. "
             "Si se omite, se usa el configurado en `OCR_ENGINE`."
         ),
     )

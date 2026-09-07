@@ -5,20 +5,23 @@
 Este servicio **no ejecuta ningún motor OCR**. Los motores viven en sus propios repositorios y este los coordina:
 
 ```
-                     ┌──────────────────────────┐
-   App ──────────────►      ocr_service         │  puerto 8003
-                     │  ──────────────────────  │
-                     │  estrategia de intentos  │
-                     │  parsing de campos       │
-                     │  confianza y umbrales    │
-                     │  cola, caché, storage    │
-                     └────┬─────────┬─────────┬────┘
-                          │         │         │
-                         POST /engine/run     │
-                          ▼         ▼         ▼
-       ocr_service_tesseract  ocr_service_easyocr  ocr_service_paddleocr
-             puerto 8005          puerto 8006          puerto 8007
-           (rápido, liviano)    (preciso, pesado)   (el más preciso, pesado)
+                     ┌─────────────────────────────┐
+   App ──────────────►         ocr_service         │  puerto 8003
+                     │  ─────────────────────────  │
+                     │     estrategia de intentos  │
+                     │     parsing de campos       │
+                     │     confianza y umbrales    │
+                     │     cola, caché, storage    │
+                     └──────────────┬──────────────┘
+                                    │
+                             POST /engine/run
+                                    │
+            ┌───────────────────────┼──────────────────────┐
+            │                       │                      │
+            ▼                       ▼                      ▼
+    ocr_service_tesseract   ocr_service_easyocr    ocr_service_paddleocr
+    puerto 8005             puerto 8006            puerto 8007
+    (rápido, liviano)       (preciso, pesado)      (el más preciso, pesado)
 ```
 
 Los tres motores son los que la propuesta manda comparar. Ninguno de ellos sabe qué documento está mirando: reciben una imagen y una transformación, y devuelven palabras con su caja y su confianza.
@@ -559,7 +562,7 @@ Página servida por el propio servicio. Replica el patrón de autenticación del
 Permite subir una imagen y elegir:
 
 - el **tipo de documento** — los tres, con una ayuda que explica qué foto espera cada uno;
-- el **motor** — `tesseract`, `easyocr` o `hybrid`. La tabla **Motores** muestra cuáles están arriba y con qué versión, y **deshabilita en el selector los que están apagados**, para que no se pueda pedir un motor que no va a correr;
+- el **motor** — `tesseract`, `easyocr`, `paddleocr` o `hybrid`. La tabla **Motores** muestra cuáles están arriba y con qué versión, y **deshabilita en el selector los que están apagados**, para que no se pueda pedir un motor que no va a correr;
 - el **modo** — sincrónico o asincrónico, este último con *polling* real del job.
 
 El resultado muestra los campos con barras de confianza coloreadas según los umbrales (verde ≥ 0,85, ámbar ≥ 0,70, rojo por debajo) y, además de la confianza y el tiempo, **el motor cuya lectura se conservó, el giro aplicado y cuántos intentos hicieron falta**. En modo híbrido el motor que figura puede no ser el que se pidió: es la forma de ver cuál de los dos ganó de verdad.

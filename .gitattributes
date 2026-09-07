@@ -1,0 +1,10 @@
+# `eol=lf` fija la convención acá y deja de depender de la configuración local
+# de cada máquina.
+* text=auto eol=lf
+
+# Imágenes: son binarios y no se convierten nunca (el conjunto sintético del
+# benchmark vive en `bench/sample_dataset/`).
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.webp binary
