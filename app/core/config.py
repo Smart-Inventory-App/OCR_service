@@ -115,6 +115,14 @@ class Settings(BaseSettings):
     STAMP_MIN_WIDTH: int = 2400
     STAMP_MAX_WIDTH: int = 3600
 
+    # Cuántas bandas de texto se recortan y prueban antes de mandar el envase
+    # entero. En una foto de 4000 px el sello es un renglón de 90 px de alto:
+    # recortado y ampliado solo pasa de ilegible a texto grande. Se prueban
+    # varias porque el motor no puede distinguir el sello de la etiqueta impresa
+    # —medido, la franja mejor puntuada resultó ser el teléfono de atención al
+    # consumidor— y elegir es trabajo del scoring, no de una heurística.
+    EXPIRY_CROP_BANDS: int = 3
+
     # Ancho que se le pide a un motor que prepara su propia entrada (EasyOCR,
     # PaddleOCR).
     # No es un detalle de implementación del motor: es una decisión de calidad

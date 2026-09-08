@@ -823,3 +823,70 @@ def test_an_incomplete_receipt_date_keeps_the_full_penalty():
     result = ocr_service.build_result(output, output.text, DocType.RECEIPT, date(2026, 9, 7))
 
     assert result.fields["fecha_compra"].confidence < settings.FIELD_CONFIDENCE_THRESHOLD
+
+
+def test_a_package_count_is_not_the_total():
+    """`TOTAL DE BULTOS: 17` es un conteo, no plata.
+
+    Aparece al pie de cualquier remito —que además no lleva importes— y sin
+    filtrarlo el documento salía con `total = 17`: un número correcto puesto en
+    el campo equivocado, que es peor que no tener el campo.
+    """
+    output = make_output(
+        ["LOGISTICA SUR S.R.L.", "Fecha: 29/08/2026",
+         "6 x DIA LOMITOS DE ATUN", "2 x HILERET LIGHT",
+         "TOTAL DE BULTOS: 17"],
+        confidence=0.97,
+    )
+
+    fields, items = receipt.parse(output, output.text, date(2026, 9, 8))
+
+    assert fields["total"].value is None
+    assert len(items) == 2
+
+
+def test_a_real_total_is_still_read():
+    output = make_output(
+        ["ALMACEN", "Fecha: 29/08/2026", "Aceite Girasol 3.100,00", "TOTAL: 3.100,00"],
+        confidence=0.97,
+    )
+
+    fields, _ = receipt.parse(output, output.text, date(2026, 9, 8))
+
+    assert fields["total"].value == 3100.00
+
+
+def test_a_delivery_note_without_prices_is_not_penalised():
+    """Un remito no lleva importes: no le falta nada.
+
+    Penalizar sus ítems por no traer precio —correcto en un ticket, donde una
+    línea sin importe suele ser un encabezado— castiga al documento por su
+    formato. Medido: los 20 remitos generados extraían bien sus ítems y los 20
+    caían igual en revisión, con la confianza justo abajo del umbral.
+    """
+    output = make_output(
+        ["LOGISTICA SUR S.R.L.", "Fecha: 29/08/2026",
+         "6 x DIA LOMITOS DE ATUN", "2 x HILERET LIGHT", "1 x ALICANTE PEREJIL"],
+        confidence=0.97,
+    )
+
+    result = ocr_service.build_result(output, output.text, DocType.RECEIPT, date(2026, 9, 8))
+
+    assert len(result.items) == 3
+    assert all(i.nombre_producto.confidence >= 0.85 for i in result.items)
+    assert result.needs_review is False
+
+
+def test_a_ticket_line_without_a_price_is_still_less_certain():
+    """La contraparte: si el documento SÍ tiene precios, la línea sin importe
+    sigue siendo un ítem menos seguro. La penalización no desapareció."""
+    output = make_output(
+        ["ALMACEN", "Fecha: 29/08/2026",
+         "2 x YERBA PLAYADITO", "Aceite Girasol 3.100,00", "TOTAL: 3.100,00"],
+        confidence=0.97,
+    )
+
+    _fields, items = receipt.parse(output, output.text, date(2026, 9, 8))
+    sin_precio = [i for i in items if "YERBA" in (i.nombre_producto.value or "")]
+
+    assert sin_precio and sin_precio[0].nombre_producto.confidence < 0.97

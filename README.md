@@ -673,13 +673,15 @@ paddleocr             fecha_vencimiento: 4/4 (100%)  marca: 3/4 (75%)  nombre_pr
 
 Las imágenes reales del proyecto **no se versionan**: `bench/dataset/` está en el `.gitignore` y llega vacío al repositorio.
 
-Si las fotos están en `Repos/imagenes/` —una carpeta por tipo de documento, cada una con su `ground_truth.json`— el dataset se arma solo:
+Si están en una carpeta propia —una subcarpeta por tipo de material, cada una con su `ground_truth.json`— el dataset se arma solo. **Hay que indicar dónde**: no existe una ruta por defecto, porque cualquiera apuntaría a la máquina de alguien.
 
 ```bash
-python -m bench.load_real_dataset
+python -m bench.load_real_dataset --source <carpeta con las fotos>
 ```
 
-Copia las imágenes prefijadas por tipo de documento (la etiqueta y el sello del mismo producto son los dos `milk.jpeg`, y sin prefijo uno pisaría al otro), une los ground truth en uno y **avisa de las fotos que el ground truth nombra pero no están**, que si no el benchmark las cuenta como fallo del motor. Hay que volver a correrlo cada vez que se agregan fotos.
+Copia las imágenes prefijadas con el nombre de su carpeta (la etiqueta y el sello del mismo producto suelen llamarse igual, y sin prefijo uno pisaría al otro), une los ground truth en uno y **avisa de las fotos que el ground truth nombra pero no están**, que si no el benchmark las cuenta como fallo del motor. Hay que volver a correrlo cada vez que se agregan fotos.
+
+Acepta las dos formas de ground truth: la plana que consume el benchmark (`{"archivo.jpg": {"doc_type": ..., "fields": {...}}}`) y la que nombra los campos directamente bajo una clave `imagenes`, que es la que sale de transcribir el conjunto a mano. Las entradas sin ningún campo esperado —sólo el texto visible del envase— se omiten: sirven para revisar a ojo, no para puntuar.
 
 También se puede armar a mano: colocá las imágenes en `bench/dataset/` junto a un `ground_truth.json`:
 

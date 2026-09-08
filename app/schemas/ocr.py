@@ -73,6 +73,28 @@ class OCRResult(BaseModel):
         description="Cuántas combinaciones de giro y filtros hizo falta probar.",
     )
 
+    warnings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Cosas que pasaron durante el procesamiento y que cambian cómo hay "
+            "que leer este resultado. La más importante: que el motor de "
+            "respaldo no estuviera disponible. Sin esto, una lectura pobre "
+            "porque el motor bueno estaba caído es indistinguible de una lectura "
+            "pobre porque la foto era mala, y son dos cosas muy distintas para "
+            "quien audita."
+        ),
+    )
+
+    texto_legible: str = Field(
+        default="",
+        description=(
+            "El texto reconocido, limpio y en un solo bloque, para que una "
+            "persona pueda contrastarlo con la foto. `raw_text` conserva la "
+            "salida cruda con sus saltos de línea, que sirve para depurar pero "
+            "no para leer."
+        ),
+    )
+
 
 class OCRJobRequest(BaseModel):
     image_url: HttpUrl

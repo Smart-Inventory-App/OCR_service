@@ -86,7 +86,14 @@ def test_a_self_preparing_engine_gets_one_attempt_per_orientation():
     """A EasyOCR no se le varían filtros que ignora, pero sí se le busca el giro."""
     plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=False)
 
-    assert len(plan) == 4
+    # Los recortes de banda van primero y también le corresponden: el recorte es
+    # geometría, no filtrado, y un motor que prepara su entrada tampoco puede
+    # inventar el sello si le llega de 90 px dentro de una foto de 4000.
+    completos = [a for a in plan if a.transform.crop_band < 0]
+
+    assert len(completos) == 4
+    assert {a.rotation for a in completos} == {0, 90, 180, 270}
+    assert {a.transform.binarize for a in completos} == {"none"}
     assert all(attempt.transform.binarize == transform.NONE for attempt in plan)
 
 
@@ -328,3 +335,56 @@ def test_the_fallback_gets_a_single_run_when_the_primary_found_the_orientation()
     ocr_service._run_hybrid(hybrid, b"x", DocType.EXPIRY_DATE, "spa", None)
 
     assert len(fallback.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Recorte a la banda del sello
+# ---------------------------------------------------------------------------
+
+def test_the_expiry_plan_tries_cropped_bands_before_the_whole_photo():
+    """El recorte va primero porque es lo más barato y lo que más aporta.
+
+    En una foto de envase de 4000 px el sello es un renglón de 90 px: ampliado
+    junto con todo lo demás sigue siendo ilegible. Una banda de 900x90 se
+    reconoce en una fracción de lo que cuesta el envase entero a 3600 px.
+    """
+    from app.core.config import settings
+
+    plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=True)
+
+    recortes = [indice for indice, a in enumerate(plan) if a.transform.crop_band >= 0]
+    completos = [indice for indice, a in enumerate(plan) if a.transform.crop_band < 0]
+
+    assert recortes, "el plan de vencimiento tiene que probar bandas recortadas"
+    assert max(recortes) < min(completos)
+    # Varias bandas por orientación: el motor no puede saber cuál es el sello.
+    assert len({plan[i].transform.crop_band for i in recortes}) == settings.EXPIRY_CROP_BANDS
+
+
+def test_only_the_expiry_plan_crops():
+    """Recortar una etiqueta o un ticket sería tirar el resto del documento."""
+    for doc_type in (DocType.PRODUCT_LABEL, DocType.RECEIPT):
+        plan = ocr_service.attempt_plan(doc_type, supports_preprocessing=True)
+
+        assert all(a.transform.crop_band < 0 for a in plan), doc_type
+
+
+def test_cropping_can_be_switched_off():
+    from app.core.config import settings
+
+    original = settings.EXPIRY_CROP_BANDS
+    settings.EXPIRY_CROP_BANDS = 0
+    try:
+        plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=True)
+    finally:
+        settings.EXPIRY_CROP_BANDS = original
+
+    assert all(a.transform.crop_band < 0 for a in plan)
+
+
+def test_the_crop_travels_in_the_engine_payload():
+    """El motor tiene que recibir qué banda recortar; si no, no recorta nada."""
+    from app.pipeline.transform import Transform
+
+    assert Transform().cropped(2).as_payload()["crop_band"] == 2
+    assert Transform().as_payload()["crop_band"] == -1

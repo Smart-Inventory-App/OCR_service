@@ -206,7 +206,12 @@ def _pick(symbols: list[Symbol]) -> Symbol | None:
     if not symbols:
         return None
 
-    retail = [symbol for symbol in symbols if symbol.symbology in RETAIL]
+    # Cuenta como código de góndola tanto una simbología minorista como otra que
+    # lleve un GTIN válido adentro: lo que importa es si identifica un producto.
+    retail = [
+        symbol for symbol in symbols
+        if symbol.symbology in RETAIL or _as_gtin(symbol.data)
+    ]
 
     return max(retail or symbols, key=lambda symbol: symbol.width * symbol.height)
 
@@ -251,9 +256,40 @@ def _normalize(symbol: Symbol) -> tuple[str | None, str]:
     if kind == "I25":
         return _normalize_itf(data, name)
 
-    # CODE-128, CODE-39, QR: no son GTIN. Se devuelven tal cual, y la confianza
-    # del parser es la que dice que no hay que confiarles el alta.
+    # CODE-128 y CODE-39 pueden llevar un GTIN adentro, y de hecho es frecuente:
+    # una etiqueta de góndola reimpresa o un código de un sistema propio suelen
+    # codificar el mismo número del producto en otra simbología. Si el contenido
+    # es todo dígitos, tiene largo de GTIN y el verificador cierra, es un código
+    # de producto aunque no venga en EAN-13, y tratarlo como si fuera un número
+    # de seguimiento sería descartar información que está ahí.
+    #
+    # El dígito verificador es lo que hace segura esta promoción: un texto
+    # cualquiera no da un GTIN válido por casualidad.
+    if kind in ("CODE128", "CODE39"):
+        como_gtin = _as_gtin(data)
+        if como_gtin is not None:
+            return como_gtin, f"{name} → EAN-13"
+
+    # QR y el resto: no son GTIN. Se devuelven tal cual, y la confianza del
+    # parser es la que dice que no hay que confiarles el alta.
     return data, name
+
+
+def _as_gtin(data: str) -> str | None:
+    """Devuelve el EAN-13 equivalente si el contenido es un GTIN válido."""
+    if not data.isdigit() or len(data) not in (8, 12, 13, 14):
+        return None
+
+    if _check_digit(data[:-1]) != int(data[-1]):
+        return None
+
+    if len(data) == 12:  # UPC-A
+        return "0" + data
+    if len(data) == 14:  # GTIN-14: se recupera el envase individual
+        body = data[1:13]
+        return body + str(_check_digit(body))
+
+    return data
 
 
 def _normalize_itf(data: str, name: str) -> tuple[str | None, str]:
@@ -363,12 +399,16 @@ def parser_confidence(symbol: Symbol, code: str, ambiguous: bool) -> float:
     """
     confidence = 1.0
 
-    if symbol.symbology not in RETAIL and symbol.symbology != "I25":
-        confidence *= CONF_NON_RETAIL
-    elif is_restricted(code):
+    if is_restricted(code):
+        # Vale para cualquier simbología: un código de balanza sigue siendo de
+        # circulación restringida aunque venga impreso en CODE-128.
         confidence *= CONF_RESTRICTED
     elif symbol.symbology == "I25":
         confidence *= CONF_CARTON if _is_gtin14(symbol.data) else CONF_NON_RETAIL
+    elif symbol.symbology not in RETAIL:
+        # Un CODE-128 o CODE-39 cuyo contenido resultó ser un GTIN válido sí
+        # identifica al producto; lo que no lo hace es un texto cualquiera.
+        confidence *= 1.0 if _as_gtin(symbol.data) else CONF_NON_RETAIL
 
     if ambiguous:
         confidence *= CONF_AMBIGUOUS
@@ -417,7 +457,12 @@ def country_of(code: str) -> str | None:
 
 
 def _country_field(symbol: Symbol, code: str) -> ExtractedField:
-    if symbol.symbology not in RETAIL and symbol.symbology != "I25":
+    lleva_gtin = (
+        symbol.symbology in RETAIL
+        or symbol.symbology == "I25"
+        or _as_gtin(symbol.data) is not None
+    )
+    if not lleva_gtin:
         return scoring.missing()
 
     country = country_of(code)

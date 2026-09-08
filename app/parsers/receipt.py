@@ -38,6 +38,13 @@ _DATE_LIKE = re.compile(r"\d{1,4}[/\-.]\d{1,2}[/\-.]\d{2,4}")
 
 _TOTAL_LINE = re.compile(r"\b(total|importe\s+total)\b", re.IGNORECASE)
 
+# "TOTAL DE BULTOS: 17" es un conteo de paquetes, no plata. Aparece al pie de
+# cualquier remito, que además no lleva importes: sin este filtro el documento
+# salía con `total = 17`, un número correcto puesto en el campo equivocado.
+_TOTAL_NO_MONETARIO = re.compile(
+    r"\b(bultos?|unidades?|items?|articulos?|renglones?|paquetes?)\b", re.IGNORECASE
+)
+
 # Un importe es un token numérico **completo**: dígitos con sus separadores,
 # delimitado a los dos lados por algo que no sea dígito, punto ni coma.
 #
@@ -131,6 +138,8 @@ def _parse_total(lines: list[list[OCRWord]]) -> ExtractedField:
         text = line_text(line)
         if not _TOTAL_LINE.search(fold(text)):
             continue
+        if _TOTAL_NO_MONETARIO.search(fold(text)):
+            continue
 
         amounts = _AMOUNT.findall(text)
         if not amounts:
@@ -174,17 +183,30 @@ def _parse_merchant(lines: list[list[OCRWord]]) -> ExtractedField:
 
 
 def _parse_items(lines: list[list[OCRWord]]) -> list[ReceiptItem]:
+    """Ítems del comprobante, con el contexto del documento entero.
+
+    Ese contexto importa para un caso concreto: **el remito no lleva precios**.
+    Sus renglones se reconocen por la cantidad explícita, y penalizarlos por no
+    traer importe —que es lo correcto en un ticket, donde la línea sin precio
+    suele ser un encabezado— castiga a todo el documento por su formato. Medido
+    sobre los remitos generados: los 20 extraían bien sus ítems y los 20 caían
+    igual en revisión manual, con la confianza justo abajo del umbral.
+    """
+    con_precio = any(_strip_trailing_price(line_text(line))[1] for line in lines)
+
     items: list[ReceiptItem] = []
 
     for line in lines:
-        item = _parse_item_line(line)
+        item = _parse_item_line(line, documento_con_precios=con_precio)
         if item is not None:
             items.append(item)
 
     return items
 
 
-def _parse_item_line(line: list[OCRWord]) -> ReceiptItem | None:
+def _parse_item_line(
+    line: list[OCRWord], documento_con_precios: bool = True
+) -> ReceiptItem | None:
     text = line_text(line)
     folded = fold(text)
 
@@ -210,8 +232,9 @@ def _parse_item_line(line: list[OCRWord]) -> ReceiptItem | None:
     # Sin cantidad explícita se asume 1: es correcto en la mayoría de los tickets,
     # pero el parser lo declara como una inferencia y baja la confianza.
     quantity_conf = 1.0 if quantity is not None else 0.6
-    # Una línea sin precio (remito) es un ítem algo menos seguro.
-    name_conf = 1.0 if had_price else 0.85
+    # Una línea sin precio es un ítem algo menos seguro… salvo que el documento
+    # entero no tenga precios, en cuyo caso no falta nada: así es un remito.
+    name_conf = 1.0 if (had_price or not documento_con_precios) else 0.85
 
     return ReceiptItem(
         nombre_producto=scoring.field(name, engine_conf, name_conf),

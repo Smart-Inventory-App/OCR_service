@@ -25,6 +25,7 @@ from app.engines.base import RawOCROutput
 from app.engines.factory import HybridEngine, build_engine
 from app.engines.remote import EngineUnavailable
 from app.parsers import barcode as barcode_parser
+from app.parsers.barcode import SYMBOLOGY_NAMES
 from app.parsers import expiry, product_label, receipt, scoring
 from app.pipeline import postprocess, transform
 from app.pipeline.transform import Transform
@@ -126,6 +127,30 @@ def _single_page_plan(
     return plan
 
 
+def _band_attempts(base: Transform, rotations: tuple[int, ...]) -> list[Attempt]:
+    """Intentos que recortan a las primeras bandas de texto de la imagen.
+
+    Se prueban varias bandas porque el motor no puede saber cuál es el sello: la
+    etiqueta impresa también es texto oscuro sobre claro, y medido sobre las
+    fotos reales la franja mejor puntuada resultó ser el teléfono de atención al
+    consumidor y no la fecha. Probar las primeras y dejar que el scoring elija es
+    más barato y más confiable que afinar una heurística de discriminación.
+
+    El giro se acota a las dos orientaciones más frecuentes: el recorte busca
+    franjas horizontales, así que en una foto muy girada no encuentra la del
+    sello y probar las cuatro sería gastar de más. Las otras dos las cubre igual
+    el plan sobre la imagen completa, que va después.
+    """
+    if settings.EXPIRY_CROP_BANDS <= 0:
+        return []
+
+    return [
+        Attempt(base.turned(degrees).cropped(banda), "block")
+        for degrees in rotations[:2]
+        for banda in range(settings.EXPIRY_CROP_BANDS)
+    ]
+
+
 def _expiry_plan(supports_preprocessing: bool) -> list[Attempt]:
     """Sello de vencimiento: además de filtros, hay que buscar la orientación.
 
@@ -140,9 +165,15 @@ def _expiry_plan(supports_preprocessing: bool) -> list[Attempt]:
 
     if not supports_preprocessing:
         stamp_res = transform.geometric(settings.ENGINE_STAMP_MAX_WIDTH)
-        return [Attempt(stamp_res.turned(deg), "block") for deg in rotations]
+        return _band_attempts(stamp_res, rotations) + [
+            Attempt(stamp_res.turned(deg), "block") for deg in rotations
+        ]
 
-    plan: list[Attempt] = []
+    # El recorte va primero y es lo más barato del plan: una banda de 900x90 se
+    # reconoce en una fracción de lo que cuesta el envase entero a 3600 px. Si
+    # trae la fecha, el plan corta ahí y no se paga nada más.
+    plan: list[Attempt] = _band_attempts(transform.stamp_adaptive(), rotations)
+
     for degrees in rotations:
         # Primero el umbral adaptativo, que es el que levanta los sellos de
         # matriz de puntos — el caso difícil y el más frecuente en un envase…
@@ -239,6 +270,13 @@ def _run_barcode(content: bytes, today: date | None) -> tuple[OCRResult, int]:
         # antes de normalizarlos: es lo que permite auditar desde el backoffice
         # que un `0`+UPC-A o un ITF-14 convertido salieron de lo que había.
         raw_text="\n".join(symbol.data for symbol in reading.symbols),
+        # Un código de barras no tiene "texto"; lo legible es qué se decodificó y
+        # en qué simbología, que es lo que una persona puede contrastar con la
+        # foto mirando los dígitos impresos debajo de las barras.
+        texto_legible=" · ".join(
+            f"{symbol.data} ({SYMBOLOGY_NAMES.get(symbol.symbology, symbol.symbology)})"
+            for symbol in reading.symbols
+        ),
     )
 
     return result, max(reading.attempts, 1)
@@ -278,10 +316,19 @@ def _run_hybrid(
         return primary_result, primary_attempts
 
     if not hybrid.fallback.is_available():
+        # Degradar en silencio es lo peor que puede hacer acá: el resultado sale
+        # con el nombre del motor barato y nada indica que el bueno no corrió.
+        # Sobre el conjunto de prueba eso pasó en 24 documentos, que parecían
+        # medidos y no lo estaban. La advertencia viaja en la respuesta.
         logger.warning(
             "Confianza %.2f bajo el umbral pero el respaldo '%s' no está disponible",
             primary_result.document_confidence,
             hybrid.fallback.name,
+        )
+        primary_result.warnings.append(
+            f"respaldo_no_disponible:{hybrid.fallback.name} — la lectura se resolvió "
+            f"sólo con '{hybrid.primary.name}'; el resultado puede mejorar cuando el "
+            f"motor de respaldo vuelva a estar en línea"
         )
         return primary_result, primary_attempts
 
@@ -309,9 +356,23 @@ def _run_hybrid(
         permitidas = set(ROTATIONS[: settings.HYBRID_FALLBACK_MAX_ROTATIONS])
         fallback_plan = [a for a in fallback_plan if a.rotation in permitidas]
 
-    fallback_result, fallback_attempts = _run_plan(
-        hybrid.fallback, fallback_plan, content, doc_type, lang, today
-    )
+    try:
+        fallback_result, fallback_attempts = _run_plan(
+            hybrid.fallback, fallback_plan, content, doc_type, lang, today
+        )
+    except EngineUnavailable as exc:
+        # El respaldo se cayó **mientras** corría —típicamente se queda sin
+        # memoria a mitad de la inferencia—. Antes eso propagaba el error y se
+        # perdía también la lectura del principal, que estaba hecha y era
+        # utilizable: sobre el conjunto de prueba, 21 documentos terminaron en
+        # 502 teniendo una lectura válida en la mano. Se conserva lo que hay y se
+        # deja dicho que el resultado está incompleto.
+        logger.warning("El respaldo '%s' falló durante la corrida: %s", hybrid.fallback.name, exc)
+        primary_result.warnings.append(
+            f"respaldo_fallo:{hybrid.fallback.name} — se cayó durante el procesamiento; "
+            f"la lectura es sólo de '{hybrid.primary.name}' y puede mejorar al reintentar"
+        )
+        return primary_result, primary_attempts
 
     attempts = primary_attempts + fallback_attempts
 
@@ -326,6 +387,24 @@ def _run_hybrid(
         return fallback_result, attempts
 
     return primary_result, attempts
+
+
+def _good_enough_to_stop(result: OCRResult, doc_type: DocType) -> bool:
+    """Si la lectura ya alcanza y no vale la pena gastar más intentos.
+
+    Para el sello y el ticket alcanza con superar el umbral de confianza. Para la
+    etiqueta se pide además que no quede en revisión, porque ahí el umbral solo
+    se satisface con lecturas equivocadas: sobre una foto girada el motor
+    devuelve texto de todos modos, el parser le encuentra una categoría y el plan
+    se corta antes de probar la orientación que sí servía.
+    """
+    if result.document_confidence < settings.RETRY_THRESHOLD:
+        return False
+
+    if doc_type is DocType.PRODUCT_LABEL:
+        return not result.needs_review
+
+    return True
 
 
 def _run_plan(
@@ -363,7 +442,16 @@ def _run_plan(
             best = result
 
         # Ya alcanza para no molestar al usuario: no se gasta tiempo en más.
-        if best.document_confidence >= settings.RETRY_THRESHOLD:
+        #
+        # Con una excepción, y está medida: en una etiqueta este corte impedía
+        # que se llegara a probar el giro. Una foto rotada devuelve texto igual
+        # —el motor lee *algo* en cualquier orientación— y si ese algo pasa el
+        # umbral, el plan se detiene y nunca prueba la orientación correcta. El
+        # resultado era que la misma imagen derecha y girada daba un nombre
+        # distinto en los 16 pares del conjunto. Para la etiqueta se exige, para
+        # cortar, que la lectura además **no necesite revisión**: es el mismo
+        # criterio con el que el híbrido decide si vale la pena seguir gastando.
+        if _good_enough_to_stop(best, doc_type):
             break
 
     if best is None:
@@ -394,6 +482,7 @@ def build_result(
         ),
         engine=output.engine,
         raw_text=text,
+        texto_legible=postprocess.readable(text, doc_type.value),
     )
 
 
