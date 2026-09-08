@@ -341,24 +341,30 @@ def test_the_fallback_gets_a_single_run_when_the_primary_found_the_orientation()
 # Recorte a la banda del sello
 # ---------------------------------------------------------------------------
 
-def test_the_expiry_plan_tries_cropped_bands_before_the_whole_photo():
-    """El recorte va primero porque es lo más barato y lo que más aporta.
+def test_only_the_self_preparing_engine_gets_cropped_bands():
+    """El recorte se le ofrece al motor de aprendizaje profundo, no al otro.
 
-    En una foto de envase de 4000 px el sello es un renglón de 90 px: ampliado
-    junto con todo lo demás sigue siendo ilegible. Una banda de 900x90 se
-    reconoce en una fracción de lo que cuesta el envase entero a 3600 px.
+    Está medido sobre los 94 sellos del conjunto: los intentos con recorte del
+    motor que depende de la cadena de filtros acertaron **0**, y los del motor
+    que prepara su propia entrada resolvieron 13 de los 37 vencimientos
+    correctos. Aislar el sello ayuda a quien puede leerlo; al que no, le seguían
+    costando seis intentos por documento que nunca ganaban.
     """
     from app.core.config import settings
 
-    plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=True)
+    con_filtros = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=True)
+    sin_filtros = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=False)
 
-    recortes = [indice for indice, a in enumerate(plan) if a.transform.crop_band >= 0]
-    completos = [indice for indice, a in enumerate(plan) if a.transform.crop_band < 0]
+    assert all(a.transform.crop_band < 0 for a in con_filtros)
 
-    assert recortes, "el plan de vencimiento tiene que probar bandas recortadas"
+    recortes = [i for i, a in enumerate(sin_filtros) if a.transform.crop_band >= 0]
+    completos = [i for i, a in enumerate(sin_filtros) if a.transform.crop_band < 0]
+
+    assert recortes, "el motor pesado tiene que probar bandas recortadas"
+    # Y primero, porque una banda de 900x90 cuesta una fracción del envase entero.
     assert max(recortes) < min(completos)
     # Varias bandas por orientación: el motor no puede saber cuál es el sello.
-    assert len({plan[i].transform.crop_band for i in recortes}) == settings.EXPIRY_CROP_BANDS
+    assert len({sin_filtros[i].transform.crop_band for i in recortes}) == settings.EXPIRY_CROP_BANDS
 
 
 def test_only_the_expiry_plan_crops():
@@ -375,7 +381,7 @@ def test_cropping_can_be_switched_off():
     original = settings.EXPIRY_CROP_BANDS
     settings.EXPIRY_CROP_BANDS = 0
     try:
-        plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=True)
+        plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=False)
     finally:
         settings.EXPIRY_CROP_BANDS = original
 
@@ -388,3 +394,70 @@ def test_the_crop_travels_in_the_engine_payload():
 
     assert Transform().cropped(2).as_payload()["crop_band"] == 2
     assert Transform().as_payload()["crop_band"] == -1
+
+
+def test_the_receipt_plan_also_searches_orientation():
+    """El ticket tampoco viene siempre derecho.
+
+    `dia_2.jpg` es el mismo comprobante que `dia_1.jpg` sacado al revés, y era
+    el único de 73 que fallaba: salía con los renglones invertidos y `SUBTOTAL`
+    leído `SUBTAL`. Como en la etiqueta, los giros van al final: el ticket
+    derecho corta antes y no los paga.
+    """
+    plan = ocr_service.attempt_plan(DocType.RECEIPT, supports_preprocessing=True)
+    rotaciones = [a.rotation for a in plan]
+
+    assert rotaciones[0] == 0
+    assert set(rotaciones) == {0, 90, 180, 270}
+    assert rotaciones.index(90) > max(
+        i for i, deg in enumerate(rotaciones) if deg == 0
+    )
+
+
+def test_receipt_rotations_can_be_switched_off():
+    from app.core.config import settings
+
+    original = settings.RECEIPT_ROTATION_SEARCH_ENABLED
+    settings.RECEIPT_ROTATION_SEARCH_ENABLED = False
+    try:
+        plan = ocr_service.attempt_plan(DocType.RECEIPT, supports_preprocessing=True)
+    finally:
+        settings.RECEIPT_ROTATION_SEARCH_ENABLED = original
+
+    assert {a.rotation for a in plan} == {0}
+
+
+def test_the_primary_orientation_is_inherited_only_when_its_reading_is_credible(monkeypatch):
+    """Una lectura mala no es una pista de orientación.
+
+    Antes alcanzaba con que la confianza fuera mayor que cero. Sobre un ticket
+    fotografiado al revés, el motor liviano devuelve basura a 0° que igual arroja
+    una confianza chica pero positiva; el coordinador daba ese giro por bueno y
+    le concedía al respaldo un único intento a 0°. El motor pesado lee ese mismo
+    ticket a 180°, pero nunca llegaba a probarlo.
+    """
+    primary = FakeEngine(["..", "??"], confidence=0.20, name="barato")
+    fallback = FakeEngine(["..", "??"], confidence=0.20, name="caro",
+                          supports_preprocessing=False)
+    hybrid_of(primary, fallback, monkeypatch)
+
+    ocr_service.process_sync(b"imagen", DocType.RECEIPT, today=TODAY)
+
+    # El respaldo buscó orientación en vez de heredar una que no significaba nada.
+    assert len({call["rotate"] for call in fallback.calls}) > 1
+
+
+def test_a_credible_primary_reading_still_saves_the_fallback_the_search(monkeypatch):
+    """La contraparte: cuando el principal sí leyó, su giro se aprovecha."""
+    primary = FakeEngine(
+        ["La Serenisima", "LECHE ENTERA", "1 litro"], confidence=0.99,
+        heights=[60, 30, 16], name="barato",
+    )
+    fallback = FakeEngine(["LECHE ENTERA"], confidence=0.99, name="caro",
+                          supports_preprocessing=False)
+    hybrid_of(primary, fallback, monkeypatch)
+
+    ocr_service.process_sync(b"imagen", DocType.PRODUCT_LABEL, today=TODAY)
+
+    # Con una lectura buena el principal ni siquiera necesita el respaldo.
+    assert len(fallback.calls) <= 1

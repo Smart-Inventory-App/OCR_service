@@ -29,8 +29,11 @@ class Transform:
 
     Es la respuesta al sello de vencimiento. En una foto de envase de 4000 px el
     sello es un renglón de 90 px de alto: ampliado junto con el resto sigue
-    siendo diminuto, y ningún motor lo levanta. Recortado y ampliado solo, pasa a
-    ser texto grande.
+    siendo diminuto, y ningún motor lo levanta. Recortado, el motor recibe el
+    renglón y no el envase entero: el sello deja de competir con la etiqueta
+    impresa y con el fondo de la foto. **No se amplía** —el motor sólo achica— y
+    es deliberado: llevar la banda a más ancho con interpolación no agrega
+    información y el reconocimiento empeora.
 
     Cuál de las bandas es el sello **no lo decide el motor**: medido sobre las
     fotos reales, el criterio de "la franja más marcada" elige el teléfono de

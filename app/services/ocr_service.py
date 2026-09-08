@@ -78,8 +78,17 @@ def attempt_plan(doc_type: DocType, supports_preprocessing: bool = True) -> list
         return _expiry_plan(supports_preprocessing)
 
     if doc_type is DocType.RECEIPT:
-        # El ticket se fotografía apoyado y de frente: girarlo no aporta.
-        return _single_page_plan(supports_preprocessing, primary_layout="block")
+        # El ticket tampoco viene siempre derecho. Se suponía que sí —"se
+        # fotografía apoyado y de frente"— y el conjunto de prueba mostró lo
+        # contrario: `dia_2.jpg` es el mismo comprobante que `dia_1.jpg` sacado
+        # al revés, y salía con los renglones invertidos y `SUBTOTAL` leído
+        # `SUBTAL`. Era el único comprobante de 73 que fallaba.
+        #
+        # Como en la etiqueta, los giros van al final del plan: el ticket derecho
+        # corta antes y no los paga.
+        rotations = ROTATIONS if settings.RECEIPT_ROTATION_SEARCH_ENABLED else (0,)
+
+        return _single_page_plan(supports_preprocessing, "block", rotations)
 
     # La etiqueta sí puede venir girada, al contrario de lo que se suponía. Sobre
     # el conjunto de prueba, las mismas 16 fotos giradas un cuarto de vuelta
@@ -140,6 +149,11 @@ def _band_attempts(base: Transform, rotations: tuple[int, ...]) -> list[Attempt]
     franjas horizontales, así que en una foto muy girada no encuentra la del
     sello y probar las cuatro sería gastar de más. Las otras dos las cubre igual
     el plan sobre la imagen completa, que va después.
+
+    Sólo se le ofrecen al motor que prepara su propia entrada. Medido sobre los
+    94 sellos del conjunto: los recortes del motor que depende de los filtros
+    acertaron 0, y los del motor de aprendizaje profundo resolvieron 13 de los
+    37 vencimientos correctos. Aislar el sello ayuda a quien puede leerlo.
     """
     if settings.EXPIRY_CROP_BANDS <= 0:
         return []
@@ -169,10 +183,15 @@ def _expiry_plan(supports_preprocessing: bool) -> list[Attempt]:
             Attempt(stamp_res.turned(deg), "block") for deg in rotations
         ]
 
-    # El recorte va primero y es lo más barato del plan: una banda de 900x90 se
-    # reconoce en una fracción de lo que cuesta el envase entero a 3600 px. Si
-    # trae la fecha, el plan corta ahí y no se paga nada más.
-    plan: list[Attempt] = _band_attempts(transform.stamp_adaptive(), rotations)
+    # Al motor que depende de la cadena de filtros **no se le recorta**, y eso
+    # está medido: sobre los 94 sellos del conjunto, sus intentos con recorte
+    # acertaron 0. Un sello de matriz de puntos no se le vuelve legible por
+    # aislarlo; le falta capacidad de reconocimiento, no encuadre. Eran seis
+    # intentos por documento que nunca ganaban.
+    #
+    # El recorte sí paga en los motores de aprendizaje profundo —resolvió 13 de
+    # los 37 vencimientos acertados— y por eso vive en la otra rama.
+    plan: list[Attempt] = []
 
     for degrees in rotations:
         # Primero el umbral adaptativo, que es el que levanta los sellos de
@@ -334,9 +353,18 @@ def _run_hybrid(
 
     fallback_plan = attempt_plan(doc_type, _supports_preprocessing(hybrid.fallback))
 
-    # Si el principal reconoció algo, su orientación ya es información buena y le
-    # ahorra al respaldo probar las otras tres.
-    if primary_result.document_confidence > 0:
+    # La orientación del principal se hereda **sólo si su lectura fue creíble**.
+    #
+    # Antes alcanzaba con que la confianza fuera mayor que cero, y eso resultó
+    # ser casi cualquier cosa: sobre un ticket fotografiado al revés, Tesseract
+    # devuelve basura a 0° que igual arroja una confianza chica pero positiva, el
+    # coordinador daba esa orientación por buena y le concedía al respaldo un
+    # único intento… a 0°. PaddleOCR lee ese mismo ticket sin problemas a 180°,
+    # pero nunca llegaba a probarlo. Era el único comprobante de 73 que fallaba.
+    #
+    # Con el umbral por documento como piso, una lectura que no llega a ser
+    # plausible deja de contar como pista de orientación y el respaldo busca.
+    if primary_result.document_confidence >= settings.DOCUMENT_CONFIDENCE_THRESHOLD:
         fallback_plan = [
             Attempt(attempt.transform.turned(primary_result.rotation), attempt.layout)
             for attempt in fallback_plan[:1]
@@ -401,7 +429,10 @@ def _good_enough_to_stop(result: OCRResult, doc_type: DocType) -> bool:
     if result.document_confidence < settings.RETRY_THRESHOLD:
         return False
 
-    if doc_type is DocType.PRODUCT_LABEL:
+    if doc_type in (DocType.PRODUCT_LABEL, DocType.RECEIPT):
+        # Mismo motivo en los dos: sobre una foto girada el motor devuelve texto
+        # igual, el parser le encuentra algo y el plan se corta antes de probar la
+        # orientación que servía.
         return not result.needs_review
 
     return True

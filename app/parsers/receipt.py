@@ -72,6 +72,12 @@ _QTY_PREFIXES = (_QTY_PREFIX_X, _QTY_PREFIX_UNIT, _QTY_PREFIX_PLAIN)
 # «Leche x 2»
 _QTY_SUFFIX = re.compile(r"^(.{3,}?)\s*[xX×]\s*(\d{1,3})$")
 
+# «2,00 x 8.128,62» — el renglón que un fiscal imprime ARRIBA de la descripción,
+# con la cantidad y el precio unitario y nada más. La cantidad puede venir con
+# decimales (`0,25 x 12.000,01` es un cuarto de kilo), y en ese caso no es una
+# unidad contable: se ignora y el ítem queda con la cantidad inferida.
+_QTY_ANNOUNCEMENT = re.compile(r"(\d{1,3}),00\s*[xX×]\s*[\d.,]+")
+
 _MIN_NAME_LENGTH = 3
 _MAX_NAME_LENGTH = 60
 
@@ -195,17 +201,52 @@ def _parse_items(lines: list[list[OCRWord]]) -> list[ReceiptItem]:
     con_precio = any(_strip_trailing_price(line_text(line))[1] for line in lines)
 
     items: list[ReceiptItem] = []
+    cantidad_anunciada: int | None = None
 
     for line in lines:
-        item = _parse_item_line(line, documento_con_precios=con_precio)
+        texto = line_text(line)
+
+        # Un ticket fiscal argentino imprime la cantidad en el renglón de ARRIBA
+        # de la descripción: `2,00 x 8.128,62` y recién después el producto con
+        # su importe. Leyendo renglón por renglón, la descripción no tiene
+        # cantidad y el parser asumía 1 — correcto de casualidad en la mayoría de
+        # los ítems, equivocado en todos los demás. Se recuerda el anuncio y se
+        # aplica a la línea siguiente.
+        anunciada = _anuncio_de_cantidad(texto)
+        if anunciada is not None:
+            cantidad_anunciada = anunciada
+            continue
+
+        item = _parse_item_line(
+            line,
+            documento_con_precios=con_precio,
+            cantidad_anunciada=cantidad_anunciada,
+        )
+        # El anuncio vale para el renglón inmediatamente siguiente y nada más:
+        # arrastrarlo convertiría un descuido del OCR en cantidades inventadas.
+        cantidad_anunciada = None
+
         if item is not None:
             items.append(item)
 
     return items
 
 
+def _anuncio_de_cantidad(texto: str) -> int | None:
+    """`2,00 x 8.128,62` → 2. Un renglón que sólo anuncia cantidad y precio.
+
+    Se exige que la línea sea **sólo** eso: si trae además una descripción, es un
+    ítem completo y lo resuelve el parser de siempre.
+    """
+    match = _QTY_ANNOUNCEMENT.fullmatch(texto.strip())
+
+    return int(match.group(1)) if match else None
+
+
 def _parse_item_line(
-    line: list[OCRWord], documento_con_precios: bool = True
+    line: list[OCRWord],
+    documento_con_precios: bool = True,
+    cantidad_anunciada: int | None = None,
 ) -> ReceiptItem | None:
     text = line_text(line)
     folded = fold(text)
@@ -221,6 +262,11 @@ def _parse_item_line(
     quantity, name = _split_quantity(body)
     if name is None or not _is_valid_name(name):
         return None
+
+    # La cantidad del renglón de arriba manda sobre la inferencia, pero no sobre
+    # una cantidad que la propia línea trae escrita.
+    if quantity is None and cantidad_anunciada is not None:
+        quantity = cantidad_anunciada
 
     # Un ítem real trae precio (ticket/factura) o cantidad explícita (remito).
     # Sin ninguno de los dos la línea es encabezado o pie, no un producto.

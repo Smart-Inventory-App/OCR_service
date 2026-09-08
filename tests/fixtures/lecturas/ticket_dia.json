@@ -1,0 +1,647 @@
+{
+ "imagen": "Tickets/dia_1.jpg",
+ "doc_type": "receipt",
+ "motor": "paddleocr",
+ "text": "Dia\nDIA ARGENTINA SA\nCUIT:30-63584975-1\nAV GALICIA 759\nIVA RESPOVSABLE INSCRIPTO AVELLANEDA\nING.8RUT05:30685849751\nFACTURA B ORIGINAL (COD. 006)\nNUM.08028-00545295 22-08-2026 17:04:50 A CONSUMIDOR FINAL CUIT:\nTDA:01505 CAJA:02 NTrx:015050200017978\nCant./Precio Unit [%BI ]\nDescripcion (%IVA) IMPORTE\n1,00X 8909,00\nPAN ARTESANO BIMBÓ (21,00) 8909,00\n7793890260885 3750,00\n1,00X (21,00) 3750,00\nCASANCR ENTERO\n7791337061351\n1,00 X 4475,00\nYOG FRUT 0% LACTOSA (21,00) 4475,00\n7794820903049\n25% YOG BEB MILKAUT -1118,75\nSUBTOTAL: 17134,00\nDESCUENTOS: -1118,75\nTOTAL $ 16015.25\nREGIMEN DE TRANSPARENCIA FISCAL AL\nCONSUMIDOR (LEY 27.743)\nIVA CONTEVIDO 2779,51\nOTROS TRIBUTOS NACIONALES\nINDIRECTOS 0,00\nRECIBI/MOS\nTARJETA $ 16015.25\nSuma de sus pagos: $16015.25\nSu vuelto: $0.00\nCODIGO DE CAJERA 903065\nCLUBDIA\n2807742051486\nAHORRO OFERTAS 1118,75\nTOT AHORRO 1118,75\nOrientacion al Consumidor\nProy. Bs, As. 0800-222-9042\nREGISTRO:\nReferencia Electronica del Comprobante\nCAE: 86349502084771 F.vto:\n2026-09-01",
+ "words": [
+  {
+   "text": "Dia",
+   "confidence": 0.9639666676521301,
+   "left": 1084,
+   "top": 662,
+   "width": 328,
+   "height": 167,
+   "line_num": 0
+  },
+  {
+   "text": "DIA ARGENTINA SA",
+   "confidence": 0.9998531937599182,
+   "left": 551,
+   "top": 809,
+   "width": 473,
+   "height": 80,
+   "line_num": 1
+  },
+  {
+   "text": "CUIT:30-63584975-1",
+   "confidence": 0.995207667350769,
+   "left": 551,
+   "top": 863,
+   "width": 530,
+   "height": 84,
+   "line_num": 2
+  },
+  {
+   "text": "AV GALICIA 759",
+   "confidence": 0.9996002912521362,
+   "left": 548,
+   "top": 918,
+   "width": 424,
+   "height": 83,
+   "line_num": 3
+  },
+  {
+   "text": "AVELLANEDA",
+   "confidence": 0.9995201230049133,
+   "left": 553,
+   "top": 981,
+   "width": 302,
+   "height": 69,
+   "line_num": 4
+  },
+  {
+   "text": "IVA RESPOVSABLE INSCRIPTO",
+   "confidence": 0.9985411167144775,
+   "left": 548,
+   "top": 1007,
+   "width": 746,
+   "height": 103,
+   "line_num": 4
+  },
+  {
+   "text": "ING.BRUTOS:30685849751",
+   "confidence": 0.996849000453949,
+   "left": 548,
+   "top": 1064,
+   "width": 680,
+   "height": 104,
+   "line_num": 5
+  },
+  {
+   "text": "FACTURA B ORIGINAL (COD. 006)",
+   "confidence": 0.9978126883506775,
+   "left": 683,
+   "top": 1119,
+   "width": 878,
+   "height": 120,
+   "line_num": 6
+  },
+  {
+   "text": "A CONSUMIDOR FINAL CUIT:",
+   "confidence": 0.9975423216819763,
+   "left": 774,
+   "top": 1191,
+   "width": 727,
+   "height": 97,
+   "line_num": 7
+  },
+  {
+   "text": "NUM.08028-00545295 22-08-2026 17:04:50",
+   "confidence": 0.9977695941925049,
+   "left": 539,
+   "top": 1236,
+   "width": 1148,
+   "height": 121,
+   "line_num": 7
+  },
+  {
+   "text": "TDA:01505 CAJA:02 NTrx:015050200017978",
+   "confidence": 0.9857161641120911,
+   "left": 542,
+   "top": 1294,
+   "width": 1142,
+   "height": 118,
+   "line_num": 8
+  },
+  {
+   "text": "Cant./Precio Unit",
+   "confidence": 0.9971582889556885,
+   "left": 542,
+   "top": 1380,
+   "width": 525,
+   "height": 103,
+   "line_num": 9
+  },
+  {
+   "text": "[%BI ]",
+   "confidence": 0.9758360385894775,
+   "left": 1259,
+   "top": 1429,
+   "width": 190,
+   "height": 83,
+   "line_num": 9
+  },
+  {
+   "text": "(%IVA)",
+   "confidence": 0.9925093650817871,
+   "left": 981,
+   "top": 1432,
+   "width": 189,
+   "height": 91,
+   "line_num": 10
+  },
+  {
+   "text": "IMPORTE",
+   "confidence": 0.9999879598617554,
+   "left": 1523,
+   "top": 1437,
+   "width": 227,
+   "height": 81,
+   "line_num": 10
+  },
+  {
+   "text": "Descripcion",
+   "confidence": 0.9999756217002869,
+   "left": 542,
+   "top": 1460,
+   "width": 339,
+   "height": 84,
+   "line_num": 10
+  },
+  {
+   "text": "8909,00",
+   "confidence": 0.9951138496398926,
+   "left": 915,
+   "top": 1515,
+   "width": 230,
+   "height": 86,
+   "line_num": 11
+  },
+  {
+   "text": "1,00X",
+   "confidence": 0.9677011370658875,
+   "left": 599,
+   "top": 1532,
+   "width": 230,
+   "height": 86,
+   "line_num": 11
+  },
+  {
+   "text": "(21,00)",
+   "confidence": 0.999950110912323,
+   "left": 1162,
+   "top": 1567,
+   "width": 229,
+   "height": 91,
+   "line_num": 12
+  },
+  {
+   "text": "8909,00",
+   "confidence": 0.998008131980896,
+   "left": 1526,
+   "top": 1575,
+   "width": 236,
+   "height": 80,
+   "line_num": 12
+  },
+  {
+   "text": "PAN ARTESANO BIMBÓ",
+   "confidence": 0.9621016383171082,
+   "left": 536,
+   "top": 1581,
+   "width": 551,
+   "height": 103,
+   "line_num": 12
+  },
+  {
+   "text": "7793890260885",
+   "confidence": 0.9999103546142578,
+   "left": 536,
+   "top": 1650,
+   "width": 399,
+   "height": 92,
+   "line_num": 13
+  },
+  {
+   "text": "3750,00",
+   "confidence": 0.9997180104255676,
+   "left": 915,
+   "top": 1690,
+   "width": 230,
+   "height": 95,
+   "line_num": 13
+  },
+  {
+   "text": "1,00X",
+   "confidence": 0.9778183102607727,
+   "left": 596,
+   "top": 1710,
+   "width": 224,
+   "height": 86,
+   "line_num": 14
+  },
+  {
+   "text": "(21,00)",
+   "confidence": 0.9403858184814453,
+   "left": 1162,
+   "top": 1753,
+   "width": 229,
+   "height": 83,
+   "line_num": 14
+  },
+  {
+   "text": "3750,00",
+   "confidence": 0.9996439814567566,
+   "left": 1532,
+   "top": 1756,
+   "width": 235,
+   "height": 80,
+   "line_num": 14
+  },
+  {
+   "text": "CASANCR ENTERO",
+   "confidence": 0.9916576743125916,
+   "left": 528,
+   "top": 1767,
+   "width": 436,
+   "height": 81,
+   "line_num": 15
+  },
+  {
+   "text": "7791337061351",
+   "confidence": 0.9680972695350647,
+   "left": 525,
+   "top": 1828,
+   "width": 402,
+   "height": 77,
+   "line_num": 16
+  },
+  {
+   "text": "4475,00",
+   "confidence": 0.9996964335441589,
+   "left": 915,
+   "top": 1882,
+   "width": 227,
+   "height": 72,
+   "line_num": 17
+  },
+  {
+   "text": "1,00 X",
+   "confidence": 0.9209190011024475,
+   "left": 579,
+   "top": 1885,
+   "width": 233,
+   "height": 78,
+   "line_num": 17
+  },
+  {
+   "text": "(21,00)",
+   "confidence": 0.9999886751174927,
+   "left": 1162,
+   "top": 1934,
+   "width": 229,
+   "height": 83,
+   "line_num": 18
+  },
+  {
+   "text": "4475,00",
+   "confidence": 0.9995607733726501,
+   "left": 1538,
+   "top": 1937,
+   "width": 241,
+   "height": 80,
+   "line_num": 18
+  },
+  {
+   "text": "YOG FRUT 0% LACTOSA",
+   "confidence": 0.9962407350540161,
+   "left": 516,
+   "top": 1948,
+   "width": 597,
+   "height": 69,
+   "line_num": 18
+  },
+  {
+   "text": "7794820903049",
+   "confidence": 0.9999780654907227,
+   "left": 510,
+   "top": 2003,
+   "width": 414,
+   "height": 80,
+   "line_num": 19
+  },
+  {
+   "text": "25% YOG BEB MILKAUT",
+   "confidence": 0.9998992085456848,
+   "left": 594,
+   "top": 2060,
+   "width": 605,
+   "height": 83,
+   "line_num": 20
+  },
+  {
+   "text": "-1118,75",
+   "confidence": 0.9999554753303528,
+   "left": 1518,
+   "top": 2063,
+   "width": 264,
+   "height": 72,
+   "line_num": 20
+  },
+  {
+   "text": "17134,00",
+   "confidence": 0.9990752935409546,
+   "left": 1515,
+   "top": 2163,
+   "width": 270,
+   "height": 81,
+   "line_num": 21
+  },
+  {
+   "text": "SUBTOTAL:",
+   "confidence": 0.9999179840087891,
+   "left": 502,
+   "top": 2172,
+   "width": 287,
+   "height": 69,
+   "line_num": 21
+  },
+  {
+   "text": "-1118,75",
+   "confidence": 0.9964358806610107,
+   "left": 1515,
+   "top": 2232,
+   "width": 270,
+   "height": 81,
+   "line_num": 22
+  },
+  {
+   "text": "DESCUENTOS:",
+   "confidence": 0.9996650218963623,
+   "left": 510,
+   "top": 2238,
+   "width": 342,
+   "height": 72,
+   "line_num": 22
+  },
+  {
+   "text": "TOTAL",
+   "confidence": 0.9999847412109375,
+   "left": 516,
+   "top": 2333,
+   "width": 304,
+   "height": 74,
+   "line_num": 23
+  },
+  {
+   "text": "16015.25",
+   "confidence": 0.999988317489624,
+   "left": 1228,
+   "top": 2336,
+   "width": 548,
+   "height": 80,
+   "line_num": 23
+  },
+  {
+   "text": "$",
+   "confidence": 0.9997327923774719,
+   "left": 1130,
+   "top": 2341,
+   "width": 104,
+   "height": 72,
+   "line_num": 23
+  },
+  {
+   "text": "REGIMEN DE TRANSPARENCIA FISCAL AL",
+   "confidence": 0.9999346137046814,
+   "left": 510,
+   "top": 2433,
+   "width": 1079,
+   "height": 83,
+   "line_num": 24
+  },
+  {
+   "text": "CONSUMIDOR (LEY 27.743)",
+   "confidence": 0.9994205236434937,
+   "left": 507,
+   "top": 2496,
+   "width": 724,
+   "height": 86,
+   "line_num": 25
+  },
+  {
+   "text": "IVA CONTEVIDO",
+   "confidence": 0.9964238405227661,
+   "left": 510,
+   "top": 2562,
+   "width": 417,
+   "height": 78,
+   "line_num": 26
+  },
+  {
+   "text": "2779,51",
+   "confidence": 0.9999883770942688,
+   "left": 1546,
+   "top": 2565,
+   "width": 239,
+   "height": 81,
+   "line_num": 26
+  },
+  {
+   "text": "OTROS TRIBUTOS NACIONALES",
+   "confidence": 0.9996120929718018,
+   "left": 505,
+   "top": 2623,
+   "width": 797,
+   "height": 94,
+   "line_num": 27
+  },
+  {
+   "text": "0,00",
+   "confidence": 0.9862486124038696,
+   "left": 1641,
+   "top": 2694,
+   "width": 149,
+   "height": 87,
+   "line_num": 28
+  },
+  {
+   "text": "INDIRECTOS",
+   "confidence": 0.9996418952941895,
+   "left": 510,
+   "top": 2697,
+   "width": 319,
+   "height": 72,
+   "line_num": 28
+  },
+  {
+   "text": "RECIBI/MOS",
+   "confidence": 0.9999070167541504,
+   "left": 499,
+   "top": 2775,
+   "width": 333,
+   "height": 86,
+   "line_num": 29
+  },
+  {
+   "text": "$ 16015.25",
+   "confidence": 0.9530256390571594,
+   "left": 1446,
+   "top": 2844,
+   "width": 347,
+   "height": 103,
+   "line_num": 30
+  },
+  {
+   "text": "TARJETA",
+   "confidence": 0.9998903870582581,
+   "left": 502,
+   "top": 2847,
+   "width": 238,
+   "height": 80,
+   "line_num": 30
+  },
+  {
+   "text": "Suma de sus pagos:",
+   "confidence": 0.984567403793335,
+   "left": 502,
+   "top": 2910,
+   "width": 574,
+   "height": 97,
+   "line_num": 31
+  },
+  {
+   "text": "$16015.25",
+   "confidence": 0.9977831244468689,
+   "left": 1452,
+   "top": 2921,
+   "width": 341,
+   "height": 92,
+   "line_num": 31
+  },
+  {
+   "text": "Su vuelto:",
+   "confidence": 0.9968469738960266,
+   "left": 502,
+   "top": 2979,
+   "width": 324,
+   "height": 89,
+   "line_num": 32
+  },
+  {
+   "text": "$0.00",
+   "confidence": 0.9981562495231628,
+   "left": 1581,
+   "top": 2993,
+   "width": 212,
+   "height": 83,
+   "line_num": 32
+  },
+  {
+   "text": "CODIGO DE CAJERA",
+   "confidence": 0.9729604721069336,
+   "left": 499,
+   "top": 3047,
+   "width": 519,
+   "height": 89,
+   "line_num": 33
+  },
+  {
+   "text": "903065",
+   "confidence": 0.9999983906745911,
+   "left": 1297,
+   "top": 3070,
+   "width": 206,
+   "height": 75,
+   "line_num": 33
+  },
+  {
+   "text": "CLUBDIA",
+   "confidence": 0.9711645841598511,
+   "left": 1004,
+   "top": 3116,
+   "width": 247,
+   "height": 92,
+   "line_num": 34
+  },
+  {
+   "text": "2807742051486",
+   "confidence": 0.9999859929084778,
+   "left": 904,
+   "top": 3179,
+   "width": 439,
+   "height": 101,
+   "line_num": 35
+  },
+  {
+   "text": "AHORRO OFERTAS",
+   "confidence": 0.998430609703064,
+   "left": 507,
+   "top": 3245,
+   "width": 454,
+   "height": 95,
+   "line_num": 36
+  },
+  {
+   "text": "1118,75",
+   "confidence": 0.9885902404785156,
+   "left": 1558,
+   "top": 3263,
+   "width": 250,
+   "height": 106,
+   "line_num": 36
+  },
+  {
+   "text": "TOT AHORRO",
+   "confidence": 0.9835326075553894,
+   "left": 507,
+   "top": 3317,
+   "width": 640,
+   "height": 118,
+   "line_num": 37
+  },
+  {
+   "text": "1118,75",
+   "confidence": 0.997256875038147,
+   "left": 1340,
+   "top": 3363,
+   "width": 456,
+   "height": 89,
+   "line_num": 37
+  },
+  {
+   "text": "Orientacion al Consumidor",
+   "confidence": 0.9976608753204346,
+   "left": 510,
+   "top": 3392,
+   "width": 804,
+   "height": 132,
+   "line_num": 38
+  },
+  {
+   "text": "Proy. Bs, As. 0800-222-9042",
+   "confidence": 0.9388557076454163,
+   "left": 510,
+   "top": 3458,
+   "width": 870,
+   "height": 123,
+   "line_num": 39
+  },
+  {
+   "text": "REGISTRO:",
+   "confidence": 0.9997963309288025,
+   "left": 522,
+   "top": 3598,
+   "width": 287,
+   "height": 95,
+   "line_num": 40
+  },
+  {
+   "text": "Referencia Electronica del Comprobante",
+   "confidence": 0.9838292002677917,
+   "left": 519,
+   "top": 3664,
+   "width": 1223,
+   "height": 164,
+   "line_num": 41
+  },
+  {
+   "text": "CAE: 86349502084771 F.vto:",
+   "confidence": 0.9528828263282776,
+   "left": 528,
+   "top": 3728,
+   "width": 861,
+   "height": 140,
+   "line_num": 42
+  },
+  {
+   "text": "2026-09-01",
+   "confidence": 0.9970987439155579,
+   "left": 1429,
+   "top": 3797,
+   "width": 327,
+   "height": 68,
+   "line_num": 43
+  }
+ ]
+}

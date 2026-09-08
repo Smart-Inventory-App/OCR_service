@@ -890,3 +890,76 @@ def test_a_ticket_line_without_a_price_is_still_less_certain():
     sin_precio = [i for i in items if "YERBA" in (i.nombre_producto.value or "")]
 
     assert sin_precio and sin_precio[0].nombre_producto.confidence < 0.97
+
+
+# ---------------------------------------------------------------------------
+# Cantidad anunciada en el renglón anterior
+# ---------------------------------------------------------------------------
+
+def test_the_quantity_announced_on_the_previous_line_is_used():
+    """Un fiscal argentino imprime `2,00 x 8.128,62` ARRIBA de la descripción.
+
+    Leyendo renglón por renglón la descripción no trae cantidad y el parser
+    asumía 1: correcto de casualidad en la mayoría de los ítems, equivocado en
+    todos los demás.
+    """
+    output = make_output(
+        ["DISTRIBUIDORA NORTE", "Fecha: 22/08/2026",
+         "2,00 x 8.128,62", "PANTENE PRO-V MIRACLES $ 16.257,24",
+         "3,00 x 534,71", "ELITE ULTRA ABSORBENTE $ 1.604,13",
+         "TOTAL: 17.861,37"],
+        confidence=0.98,
+    )
+
+    _fields, items = receipt.parse(output, output.text, date(2026, 9, 8))
+    cantidades = {i.nombre_producto.value.split()[0]: i.cantidad.value for i in items}
+
+    assert cantidades.get("PANTENE") == 2
+    assert cantidades.get("ELITE") == 3
+
+
+def test_the_announcement_only_applies_to_the_next_line():
+    """Arrastrar el anuncio convertiría un descuido del OCR en cantidades
+    inventadas: vale para el renglón siguiente y se descarta."""
+    output = make_output(
+        ["ALMACEN", "Fecha: 22/08/2026",
+         "3,00 x 500,00", "YERBA PLAYADITO $ 1.500,00",
+         "ACEITE NATURA $ 900,00",
+         "TOTAL: 2.400,00"],
+        confidence=0.98,
+    )
+
+    _fields, items = receipt.parse(output, output.text, date(2026, 9, 8))
+    cantidades = {i.nombre_producto.value.split()[0]: i.cantidad.value for i in items}
+
+    assert cantidades.get("YERBA") == 3
+    assert cantidades.get("ACEITE") == 1
+
+
+def test_a_fractional_announcement_is_ignored():
+    """`0,25 x 12.000,01` es un cuarto de kilo, no una unidad contable."""
+    output = make_output(
+        ["CASA RAMOS", "Fecha: 04/09/2026",
+         "0,25 x 12.000,01", "TALLARINES AL HUEVO FINOS $ 3.000,00",
+         "TOTAL: 3.000,00"],
+        confidence=0.98,
+    )
+
+    _fields, items = receipt.parse(output, output.text, date(2026, 9, 8))
+
+    assert items and items[0].cantidad.value == 1
+    # Y se declara como inferencia, no como dato leído.
+    assert items[0].cantidad.confidence < 0.85
+
+
+def test_a_quantity_written_on_the_line_wins_over_the_announcement():
+    output = make_output(
+        ["ALMACEN", "Fecha: 22/08/2026",
+         "3,00 x 500,00", "2 x YERBA PLAYADITO $ 1.000,00",
+         "TOTAL: 1.000,00"],
+        confidence=0.98,
+    )
+
+    _fields, items = receipt.parse(output, output.text, date(2026, 9, 8))
+
+    assert items and items[0].cantidad.value == 2

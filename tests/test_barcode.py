@@ -39,8 +39,14 @@ def symbol(data: str, symbology: str = "EAN13", width: int = 300, height: int = 
     return decoder.Symbol(data=data, symbology=symbology, width=width, height=height)
 
 
-def reading(*symbols) -> decoder.BarcodeReading:
-    return decoder.BarcodeReading(symbols=list(symbols), attempts=1, variant="directo")
+def reading(*symbols, corroborated: bool = True) -> decoder.BarcodeReading:
+    """Lectura de prueba. Se marca corroborada salvo que el test diga lo
+    contrario: es el caso normal, y así los tests miden lo que quieren medir en
+    vez de arrastrar la penalización por falta de segunda opinión."""
+    return decoder.BarcodeReading(
+        symbols=list(symbols), attempts=1, variant="directo",
+        corroborated=corroborated,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +111,13 @@ class TestEscalera:
         """
         nombres = [name for name, _ in decoder._variants()]
 
+        from app.core.config import settings
+
         assert nombres[0] == "directo"
         assert nombres.index("reducida 2048px") < nombres.index("ampliada")
-        assert [n for n in nombres if n.startswith("reducida")] == [
-            "reducida 2048px", "reducida 1600px", "reducida 1200px",
-            "reducida 900px", "reducida 640px",
-        ]
+        # Las reducciones simples, de mayor a menor, antes de cualquier combinación.
+        simples = [n for n in nombres if n.startswith("reducida") and "+" not in n]
+        assert simples == [f"reducida {w}px" for w in settings.barcode_downscale_widths]
 
     def test_una_reduccion_no_agranda_una_imagen_chica(self):
         """Reducir a 2048 px una foto de 1200 no tiene sentido: se saltea."""
@@ -134,9 +141,13 @@ class TestEscalera:
 
         assert result.symbols == []
         assert result.found is False
-        # Se agotó la escalera entera: directo, las reducciones que aplican, la
-        # ampliación y las dos con enfoque.
-        assert result.attempts == 6
+        # Se agotó la escalera: todas las variantes que aplican a esta imagen.
+        aplicables = sum(
+            1 for _n, build in decoder._variants()
+            if build(Image.open(io.BytesIO(barcode_photo(EAN13_AR_BODY, width=120)))
+                     .convert("L")) is not None
+        )
+        assert result.attempts == aplicables
 
     def test_desenfoque_severo_no_se_inventa(self):
         result = decoder.decode(barcode_photo(EAN13_AR_BODY, width=420, blur=3.2))
@@ -546,3 +557,66 @@ class TestCoordinador:
     def test_el_decodificador_esta_disponible(self):
         assert decoder.is_available() is True
         assert decoder.version() != "no instalado"
+
+
+# ---------------------------------------------------------------------------
+# Corroboración entre variantes
+# ---------------------------------------------------------------------------
+
+class TestCorroboracion:
+    """Una segunda variante que lee lo mismo es la única evidencia independiente.
+
+    El dígito verificador atrapa todos los errores de un dígito pero no todas las
+    transposiciones: sobre el conjunto de prueba aparecieron imágenes donde dos
+    variantes daban dos códigos **distintos y los dos válidos**, y se elegía por
+    el tamaño del símbolo, es decir por nada.
+    """
+
+    def test_una_lectura_corroborada_no_se_penaliza(self):
+        fields = parser.parse(reading(symbol(EAN13_AR), corroborated=True))
+
+        assert fields["codigo"].confidence == 1.0
+
+    def test_una_lectura_sin_corroborar_baja_la_confianza(self):
+        fields = parser.parse(reading(symbol(EAN13_AR), corroborated=False))
+
+        assert fields["codigo"].confidence == pytest.approx(parser.CONF_SIN_CORROBORAR)
+        assert fields["codigo"].value == EAN13_AR, "se sigue ofreciendo el código"
+
+    def test_una_foto_nitida_se_corrobora_sola(self):
+        """Un código legible lo lee más de una variante: es el caso normal y no
+        tiene que pagar la penalización."""
+        result = decoder.decode(barcode_photo(EAN13_AR_BODY, width=420))
+
+        assert result.corroborated is True
+
+    def test_no_hay_corroboracion_si_las_demas_variantes_no_leen(self):
+        """Sin una segunda opinión, la lectura se marca sin corroborar.
+
+        Se prueba sobre `_corroborate` y no sobre una foto: con 22 variantes en
+        la escalera, encontrar una imagen que lea en exactamente una es un
+        equilibrio frágil, y el test mediría la suerte del caso en vez de la
+        regla.
+        """
+        pyzbar = decoder._pyzbar()
+        simbolos = [decoder.Symbol(data=EAN13_AR, symbology="EAN13")]
+        blanco = Image.new("L", (400, 200), 255)
+
+        # Variantes posteriores que no leen nada: nadie confirma.
+        variantes = [("ganadora", lambda im: im), ("otra", lambda im: im)]
+
+        assert decoder._corroborate(pyzbar, simbolos, iter(variantes), blanco, "ganadora") is False
+
+    def test_hay_corroboracion_si_otra_variante_lee_lo_mismo(self):
+        pyzbar = decoder._pyzbar()
+        photo = Image.open(io.BytesIO(barcode_photo(EAN13_AR_BODY, width=420))).convert("L")
+        simbolos = decoder._scan(pyzbar, photo)
+        variantes = [("ganadora", lambda im: im), ("otra", lambda im: im)]
+
+        assert decoder._corroborate(pyzbar, simbolos, iter(variantes), photo, "ganadora") is True
+
+    def test_una_lectura_recuperada_por_reduccion_sigue_corroborada(self):
+        """Varias reducciones leen el mismo código: se confirman entre ellas."""
+        photo = barcode_photo(EAN13_AR_BODY, width=3000, blur=12, canvas=(4000, 2400))
+
+        assert decoder.decode(photo).corroborated is True

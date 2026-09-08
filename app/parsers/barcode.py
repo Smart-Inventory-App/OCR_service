@@ -151,6 +151,15 @@ CONF_AMBIGUOUS = 0.7
 CONF_UNVERIFIED = 0.9
 """Simbología sin dígito verificador obligatorio (ITF suelto, CODE-39)."""
 
+CONF_SIN_CORROBORAR = 0.8
+"""Una sola variante de la imagen leyó el código y ninguna otra lo confirmó.
+
+El dígito verificador atrapa todos los errores de un dígito pero no todas las
+transposiciones: sobre el conjunto de prueba hubo imágenes donde dos variantes
+daban dos códigos **distintos y los dos válidos**. Una lectura respaldada por una
+segunda variante es evidencia independiente; una lectura sola es una apuesta con
+buen respaldo pero sin confirmar, y el usuario merece saberlo."""
+
 
 def parse(
     reading: BarcodeReading, today: date | None = None
@@ -185,7 +194,9 @@ def parse(
         "codigo": scoring.field(
             value=code,
             engine_conf=decoder_confidence(symbol),
-            parser_conf=parser_confidence(symbol, code, ambiguous),
+            parser_conf=parser_confidence(
+                symbol, code, ambiguous, corroborated=reading.corroborated
+            ),
         ),
         "simbologia": _field(symbology, 1.0),
         "pais_registro": _country_field(symbol, code),
@@ -390,7 +401,9 @@ def _is_gtin14(data: str) -> bool:
     return len(data) == 14 and data.isdigit() and _check_digit(data[:-1]) == int(data[-1])
 
 
-def parser_confidence(symbol: Symbol, code: str, ambiguous: bool) -> float:
+def parser_confidence(
+    symbol: Symbol, code: str, ambiguous: bool, corroborated: bool = True
+) -> float:
     """Qué tan seguro es que este código identifique al producto del usuario.
 
     Es una pregunta distinta de si se leyó bien, y es la que decide si el alta
@@ -412,6 +425,9 @@ def parser_confidence(symbol: Symbol, code: str, ambiguous: bool) -> float:
 
     if ambiguous:
         confidence *= CONF_AMBIGUOUS
+
+    if not corroborated:
+        confidence *= CONF_SIN_CORROBORAR
 
     return confidence
 

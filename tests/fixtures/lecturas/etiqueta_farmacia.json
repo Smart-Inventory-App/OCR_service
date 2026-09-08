@@ -1,0 +1,71 @@
+{
+ "imagen": "Farmacia/10F.jpg",
+ "doc_type": "product_label",
+ "motor": "paddleocr",
+ "text": "Ibu&l ANALGÉSICO Y ANTHINFLÁMATORIO HALEON\nFORTE\nRÁPIDA ACCIÓN\nIbuprofeno 400 mg\n20cAPBULAVTA\nINDUSTRIAARGENTINA",
+ "words": [
+  {
+   "text": "ANALGÉSICO Y ANTHINFLÁMATORIO HALEON",
+   "confidence": 0.9491187334060669,
+   "left": 695,
+   "top": 111,
+   "width": 400,
+   "height": 40,
+   "line_num": 0
+  },
+  {
+   "text": "Ibu&l",
+   "confidence": 0.9114193916320801,
+   "left": 561,
+   "top": 143,
+   "width": 544,
+   "height": 168,
+   "line_num": 0
+  },
+  {
+   "text": "FORTE",
+   "confidence": 0.9999303817749023,
+   "left": 801,
+   "top": 301,
+   "width": 262,
+   "height": 64,
+   "line_num": 1
+  },
+  {
+   "text": "RÁPIDA ACCIÓN",
+   "confidence": 0.999875009059906,
+   "left": 811,
+   "top": 401,
+   "width": 270,
+   "height": 40,
+   "line_num": 2
+  },
+  {
+   "text": "Ibuprofeno 400 mg",
+   "confidence": 0.9895761013031006,
+   "left": 659,
+   "top": 475,
+   "width": 430,
+   "height": 104,
+   "line_num": 3
+  },
+  {
+   "text": "20cAPBULAVTA",
+   "confidence": 0.8000065684318542,
+   "left": 369,
+   "top": 609,
+   "width": 232,
+   "height": 62,
+   "line_num": 4
+  },
+  {
+   "text": "INDUSTRIAARGENTINA",
+   "confidence": 0.9919351935386658,
+   "left": 377,
+   "top": 655,
+   "width": 126,
+   "height": 22,
+   "line_num": 5
+  }
+ ]
+}

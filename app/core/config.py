@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     # de filtros, así que la foto derecha sigue resolviéndose en un intento.
     LABEL_ROTATION_SEARCH_ENABLED: bool = True
 
+    # Y el ticket tampoco. Misma suposición, mismo desmentido: `dia_2.jpg` es el
+    # mismo comprobante que `dia_1.jpg` sacado al revés, y era el único de 73 que
+    # fallaba —salía con los renglones invertidos y `SUBTOTAL` leído `SUBTAL`—.
+    RECEIPT_ROTATION_SEARCH_ENABLED: bool = True
+
     # Preparación de la imagen para el escaneo de etiquetas y tickets.
     PREPROCESS_GRAYSCALE: bool = True
     PREPROCESS_UPSCALE: bool = True
@@ -117,8 +122,9 @@ class Settings(BaseSettings):
 
     # Cuántas bandas de texto se recortan y prueban antes de mandar el envase
     # entero. En una foto de 4000 px el sello es un renglón de 90 px de alto:
-    # recortado y ampliado solo pasa de ilegible a texto grande. Se prueban
-    # varias porque el motor no puede distinguir el sello de la etiqueta impresa
+    # recortarlo lo deja solo frente al modelo, sin la etiqueta impresa ni el
+    # fondo compitiendo por la detección. Se prueban varias bandas porque el
+    # motor no puede distinguir el sello de la etiqueta impresa
     # —medido, la franja mejor puntuada resultó ser el teléfono de atención al
     # consumidor— y elegir es trabajo del scoring, no de una heurística.
     EXPIRY_CROP_BANDS: int = 3
@@ -138,7 +144,7 @@ class Settings(BaseSettings):
     # búsqueda de orientación —ZBar recorre la imagen en varias direcciones por
     # su cuenta— ni realce de contraste —binariza internamente—. Lo único que
     # mueve la aguja es la resolución, y el enfoque en una banda angosta.
-    BARCODE_DOWNSCALE_WIDTHS_STR: str = "2048,1600,1200,900,640"
+    BARCODE_DOWNSCALE_WIDTHS_STR: str = "2048,1600,1400,1200,1024,900,800,640,512"
     """Anchos a los que se prueba reducir la imagen, de mayor a menor.
 
     Es el intento que más lecturas recupera de todo el módulo: sobre el conjunto
@@ -146,6 +152,11 @@ class Settings(BaseSettings):
     porque ninguno domina a los otros —2048 px recupera 43, 1600 recupera 60 y
     640 recupera 71, y no son subconjuntos—, así que se recorren de mayor a menor
     para descartar lo menos posible antes de tener que descartar más.
+
+    Los anchos intermedios y el de 512 se agregaron después, midiendo sobre los
+    31 códigos impresos que seguían sin leerse: 512 px recupera 6 de ellos y
+    1400 px otros 4. Cada ancho es un intento más, pero sólo lo pagan las
+    imágenes que fallaron en todos los anteriores.
     """
 
     BARCODE_UPSCALE_FACTOR: int = 2

@@ -113,6 +113,16 @@ class BarcodeReading:
     attempts: int = 0
     variant: str = ""
     """Qué intento resolvió la lectura, para auditoría desde el backoffice."""
+
+    corroborated: bool = False
+    """Si una segunda variante de la imagen leyó exactamente lo mismo.
+
+    Es la única evidencia independiente que hay de que la lectura es correcta: el
+    dígito verificador atrapa los errores de un dígito pero no todas las
+    transposiciones, y sobre el conjunto de prueba aparecieron imágenes donde dos
+    variantes daban dos códigos distintos y válidos.
+    """
+
     elapsed_ms: int = 0
 
     @property
@@ -175,6 +185,16 @@ def decode(content: bytes) -> BarcodeReading:
         if symbols:
             reading.symbols = symbols
             reading.variant = name
+
+            # Corroboración: se sigue una variante más para ver si dice lo mismo.
+            #
+            # El dígito verificador atrapa todos los errores de un dígito, pero
+            # no todas las transposiciones: sobre el conjunto de prueba hubo
+            # imágenes donde dos variantes daban dos códigos **distintos y los
+            # dos válidos**, y se elegía por tamaño del símbolo, es decir por
+            # nada. Una segunda lectura que coincide vale más que cualquier
+            # heurística de desempate, y cuesta un solo intento extra.
+            reading.corroborated = _corroborate(pyzbar, symbols, _variants(), image, name)
             break
 
     reading.elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -188,6 +208,36 @@ def decode(content: bytes) -> BarcodeReading:
     )
 
     return reading
+
+
+def _corroborate(pyzbar, symbols, variantes, image, ganadora: str) -> bool:
+    """Busca una segunda variante que lea exactamente los mismos códigos.
+
+    Devuelve True en cuanto una coincide, False si ninguna de las siguientes lo
+    hace o si ninguna lee nada. No es un veredicto sobre si la lectura es
+    correcta —una foto puede tener un solo código legible en una sola variante—
+    sino sobre cuánta evidencia independiente la respalda, que es lo que el
+    parser necesita para decidir si puede darla por buena sin confirmación.
+    """
+    esperado = {s.data for s in symbols}
+    posteriores = False
+
+    for name, build in variantes:
+        if name == ganadora:
+            posteriores = True
+            continue
+        if not posteriores:
+            continue
+
+        candidate = build(image)
+        if candidate is None:
+            continue
+
+        otros = {s.data for s in _scan(pyzbar, candidate)}
+        if otros:
+            return otros == esperado
+
+    return False
 
 
 def _scan(pyzbar, image: Image.Image) -> list[Symbol]:
@@ -246,6 +296,16 @@ def _variants():
     if settings.BARCODE_SHARPEN_ENABLED:
         yield "enfocada", _sharpened
         yield "ampliada+enfocada", lambda image: _sharpened(_upscaled(image))
+
+        # Reducir y después enfocar: la reducción devuelve el borde entre barra y
+        # espacio y el enfoque lo marca. Medido sobre los códigos impresos que
+        # ninguna otra variante levanta, recupera 3 más. Va al final porque es la
+        # combinación más cara y la que menos aporta.
+        for width in settings.barcode_downscale_widths:
+            yield (
+                f"reducida {width}px+enfocada",
+                lambda image, w=width: _sharpened(_downscaler(w)(image)),
+            )
 
 
 def _downscaler(width: int):
