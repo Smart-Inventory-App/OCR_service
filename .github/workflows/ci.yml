@@ -26,9 +26,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # `bench/` queda deliberadamente afuera: el benchmark necesita los tres
-      # servicios de motor levantados y tarda ~10 minutos. Es una herramienta de
-      # medición, no de regresión.
+      # `bench/` e `integration_tests/` quedan deliberadamente afuera, y por el
+      # mismo motivo: los dos necesitan los tres servicios de motor levantados.
+      #
+      #   `bench/`              mide precisión sobre el conjunto de fotos y tarda
+      #                         ~10 minutos. Es una herramienta de medición, no de
+      #                         regresión.
+      #   `integration_tests/`  verifica el contrato con los motores de verdad —
+      #                         que la `Transform` viaje y se aplique, que cada
+      #                         motor declare sus capacidades, que las lecturas
+      #                         grabadas sigan representando al módulo. Se corre a
+      #                         mano con `pytest -c pytest-integration.ini`.
+      #
+      # Que estén fuera de `tests/` es lo que hace que este paso no tenga que
+      # excluirlos: `pytest tests/` no los ve. No agregar `pytest` a secas acá.
       - name: Run tests with coverage
         run: |
           pytest tests/ \

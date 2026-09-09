@@ -46,7 +46,7 @@ def parser_confidence(parsed: dates.ParsedDate, text: str, today: date) -> float
     # Una fecha anunciada por "VTO"/"CONSUMIR PREFERENTEMENTE" es mucho más
     # segura que una suelta: en un envase hay números por todos lados (lote,
     # hora, código de barras) y sin el anuncio no hay forma de saber cuál es.
-    if not dates.has_keyword_before(text, parsed, dates.EXPIRY_KEYWORDS):
+    if not dates.announced_as_expiry(text, parsed):
         confidence *= 0.85
 
     # El día inferido (formato MM/AAAA) es una suposición del parser, pero es la

@@ -299,7 +299,12 @@ También se puede elegir **por petición**, que es lo que usa el banco de prueba
 ### 3. Parsing
 
 - **Etiqueta** (`parsers/product_label.py`) — nombre por categoría de producto, marca por prominencia tipográfica, detalles por contenido y calificativos. Ver [Evolución § 3.e](#3-precisión-sobre-fotos-reales-de-producto).
-- **Vencimiento** (`parsers/expiry.py` + `parsers/dates.py`) — formatos argentinos habituales: `15/08/2027`, `15-08-27`, `2027-08-15`, `15 AGO 2027`, `27FEB27`, `08/2027`, y las palabras que las anuncian (`VTO`, `VENCE`, `CONS. PREF.`, `Consumir preferentemente antes de`, `BEST BEFORE`). Todo se normaliza a ISO `YYYY-MM-DD`; si el formato sólo trae mes y año se asume el último día del mes.
+- **Vencimiento** (`parsers/expiry.py` + `parsers/dates.py`) — formatos argentinos habituales: `15/08/2027`, `15-08-27`, `15 08 2027`, `2027-08-15`, `15 AGO 2027`, `27FEB27`, `08/2027`, `AGO 2027`, y las palabras que las anuncian (`VTO`, `VENCE`, `VENCIMIENTO`, `CONS. PREF.`, `Consumir preferentemente antes de`, `BEST BEFORE`, y la `V` sola del envase de farmacia). Todo se normaliza a ISO `YYYY-MM-DD`; si el formato sólo trae mes y año se asume el último día del mes.
+
+Dos reglas gobiernan lo que **no** se acepta, y las dos salieron de medir sobre las fotos del conjunto:
+
+- **Mes/año con año de dos dígitos (`03/28`) sólo cuenta si lo anuncia una palabra de vencimiento.** Suelto es indistinguible de un día y un mes. Con el anuncio adelante no hay ambigüedad: nadie imprime un día y un mes después de «vence». Es el formato más frecuente en el envase de farmacia, y `L 1279 V 03/28` —donde `L` es el lote y `V` el vencimiento— sale bien en un solo intento.
+- **Los dos separadores de un día/mes/año tienen que ser el mismo.** `15/08/2027` y `15 08 2027` valen; `1 09/27` no, porque ese `1` es un resto del lote y la lectura correcta es «septiembre de 2027». Antes se devolvía el 1 de septiembre, que es exactamente el tipo de dato falso que el usuario podría aceptar sin mirar.
 - **Ticket** (`parsers/receipt.py`) — segmenta líneas de ítem separando primero el importe final, luego la cantidad (`2 x Leche`, `Leche x 2`, `3 Yogur`). Una línea es ítem **sólo si trae precio o cantidad explícita**: así los encabezados y los pies (`TOTAL`, `CUIT`, `FECHA`) no se confunden con productos.
 
 ### 4. Confianza y `needs_review`
@@ -605,7 +610,7 @@ curl http://localhost:8003/ocr/jobs/<job_id> -H "Authorization: Bearer $TOKEN"
 pytest
 ```
 
-**318 tests, 94 % de cobertura.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
+**406 tests, 95 % de cobertura, en unos 20 segundos.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
 
 | Archivo | Qué cubre |
 |---------|-----------|
@@ -617,18 +622,54 @@ pytest
 | `test_clients.py` | clientes HTTP y el loop del worker |
 | `test_acceptance.py` | **el *gate* del módulo**: precisión ≥ 85% por campo y ≥ 70% por documento |
 | `test_barcode.py` | la escalera de intentos del decodificador, la normalización a GTIN y el dominio argentino |
+| `test_fotos_reales.py` | **fotos del conjunto de prueba**, sin levantar un motor (ver abajo) |
+
+#### Fotos Reales Sin Motores
+
+`test_fotos_reales.py` contesta la pregunta que ninguna imagen dibujada en memoria puede contestar —si el módulo resuelve una foto de verdad— y lo hace sin depender de los motores, que es lo que le permite correr en el CI. La pregunta se parte igual que el módulo:
+
+- **El código de barras se decodifica acá**, con ZBar, que es una librería del sistema y no un modelo. La foto entra entera y se verifica el resultado final. Son las dos únicas imágenes versionadas: un EAN-13 de farmacia y el código impreso de 4080 px que **sólo se lee reduciendo** —la foto que motivó el cambio con más impacto medido del módulo—.
+- **El texto lo reconocen los motores, que viven en otros servicios.** Lo que se versiona es **la salida que devolvieron de verdad** (`tests/fixtures/lecturas/*.json`: texto y palabras con caja y confianza, 40 KB) y contra eso corren los parsers y el scoring. Cubre marca-contra-nombre, monodroga, `MM/AA`, `27FEB27`, una factura B real y un remito sin precios.
+
+Son 40 KB y milisegundos, en lugar de 1,7 MB de fotos y siete minutos de inferencia. Para regrabar las lecturas cuando cambie un motor o la estrategia de intentos: `python -m bench.grabar_lecturas --source <carpeta de fotos>` con los servicios arriba. Las fotos **no viven en ningún repositorio**: son material de prueba local.
 
 Los tres repositorios de motor tienen sus propias suites, que cubren la cadena de OpenCV y la traducción de la salida de cada motor:
 
 | Repositorio | Tests | Cobertura |
 |---|---|---|
-| `ocr_service_tesseract` | 66 | 97 % |
-| `ocr_service_easyocr` | 36 | 91 % |
-| `ocr_service_paddleocr` | 40 | 91 % |
+| `ocr_service_tesseract` | 71 | 96 % |
+| `ocr_service_easyocr` | 42 | 92 % |
+| `ocr_service_paddleocr` | 46 | 92 % |
 
-**460 tests en total** en los cuatro repositorios del módulo.
+`ocr_service_easyocr` y `ocr_service_paddleocr` incluyen `test_bandas_reales.py`, que ejercita la detección de bandas de texto sobre **una foto de envase real** —la única imagen versionada en cada uno, de 103 KB— sin cargar el modelo. Son los dos motores a los que el coordinador les manda recortes, y esa función no se puede probar con un rectángulo dibujado.
 
-> Ninguna suite lee las fotos del proyecto: el dataset real vive fuera del repositorio y los tests se sostienen solos con imágenes generadas en memoria, motores dobles y `fakeredis`. Las fotos son para el **benchmark**, que es otra cosa: mide precisión, no evita regresiones.
+**565 tests en total** en los cuatro repositorios del módulo, todos en el CI y sin ningún motor instalado.
+
+### Integración con los motores (fuera del CI)
+
+Todo lo de arriba corre sin motores, y eso es lo que lo hace utilizable como red de regresión. Pero hay afirmaciones que un doble **no puede desmentir**: contesta lo que uno le dijo que conteste, así que una suposición equivocada sobre el otro lado sobrevive intacta. Para eso está `integration_tests/`, que habla con los tres servicios de verdad.
+
+```bash
+docker compose up -d
+pytest -c pytest-integration.ini
+```
+
+Vive **fuera de `tests/`** a propósito, y ahí está toda la separación: el CI corre `pytest tests/`, así que nunca las recoge — no hay marcador que recordar ni variable que setear para que el build siga siendo verde sin Docker. Tienen su propio archivo de configuración porque también necesitan lo contrario que el CI: el motor híbrido en vez del doble, las URLs apuntando a `localhost` en vez de a la red de Docker, y sin cobertura (escribir `coverage.xml` acá pisaría el del CI). Si los motores no están, la sesión entera se saltea con el motivo puesto en lugar de fallar test por test.
+
+| Archivo | Qué verifica | Por qué no alcanza un doble |
+|---|---|---|
+| `test_contrato_motores.py` | los tres responden y se identifican; devuelven palabras con caja y confianza sobre una foto real; la `Transform` viaja por HTTP y **se aplica**; cada uno **declara** si prepara su propia entrada | `attempt_plan` arma un plan distinto según esa capacidad: si el motor cambiara de opinión, los planes se armarían mal y ningún doble lo notaría |
+| `test_extremo_a_extremo.py` | que el código de barras dé el mismo número con `engine=tesseract` y con `engine=paddleocr`; que las lecturas grabadas **sigan representando al módulo** | lo primero es la razón por la que ZBar corre en el coordinador y no repartido entre los motores; lo segundo es el riesgo del fixture barato — si un motor mejora o cambia la estrategia de intentos, `tests/fixtures/lecturas/` queda viejo y nada lo dice |
+
+La segunda mitad necesita las fotos del conjunto de prueba, que **no viven en el repositorio**. Sin ellas se saltea sola; con ellas se le dice dónde están:
+
+```bash
+OCR_FOTOS="/ruta/al/conjunto" pytest -c pytest-integration.ini
+```
+
+Son 17 tests y tardan unos 4 minutos —medido—, no los 20 segundos de la suite del CI: la mitad son inferencias reales sobre fotos de hasta 4000 px. Cuándo correrlas: al tocar el contrato con los motores, al cambiar la estrategia de intentos, al actualizar la imagen de un motor, y antes de integrar el módulo con el resto del sistema. Si falla `test_la_lectura_grabada_sigue_representando_al_modulo`, el mensaje dice qué hacer: mirar el diff de `python -m bench.grabar_lecturas` antes de tocar nada, porque puede estar fallando por una **mejora** del motor y no por una regresión.
+
+> Ninguna suite del CI lee el dataset del proyecto: vive fuera del repositorio y los tests se sostienen con imágenes generadas en memoria, dos fotos versionadas de código de barras, lecturas grabadas, motores dobles y `fakeredis`. Las fotos son para el **benchmark** —que mide precisión, no evita regresiones— y para `integration_tests/`, que se pide a mano.
 
 ---
 

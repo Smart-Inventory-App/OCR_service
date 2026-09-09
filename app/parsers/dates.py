@@ -11,6 +11,18 @@ dos trampas que aparecieron al medir sobre fotos reales de envase:
   dentro del mes (`24 GCT 27` por `24 OCT 27`, `27FEBZ7` por `27FEB27`). Un
   patrón tolerante recupera esos casos y el scoring los penaliza por ser una
   lectura reparada y no una lectura limpia.
+
+Y dos reglas de lo que **no** se acepta, que valen tanto como los formatos que sí:
+
+- **`03/28` suelto no es una fecha.** Mes/año con año de dos dígitos sólo se
+  reconoce si lo anuncia una palabra de vencimiento, porque sin el anuncio es
+  indistinguible de un día y un mes.
+- **Los dos separadores de un día/mes/año tienen que ser el mismo.** `1 09/27`
+  es un resto del lote pegado a un mes/año, no el 1 de septiembre.
+
+Las dos apuntan a lo mismo: en este módulo, **no devolver nada es mejor que
+devolver una fecha falsa**, porque el usuario ve un campo con un valor plausible
+y lo acepta sin volver a mirar la foto.
 """
 
 import re
@@ -88,6 +100,16 @@ class ParsedDate:
     fuzzy_month: bool = False
     """True si el mes se resolvió por similitud y no por coincidencia exacta."""
 
+    keyed: bool = False
+    """True si el propio patrón exigió la palabra clave para reconocer la fecha.
+
+    `has_keyword_before` mira hacia atrás buscando una de `EXPIRY_KEYWORDS`, y esa
+    lista sólo puede contener palabras largas: son subcadenas, y agregarle `v`
+    haría que cualquier texto con una `v` cerca contara como anuncio. Los patrones
+    que ya exigen la palabra clave para existir lo dicen acá y se ahorran esa
+    búsqueda, que además volvería a fallar.
+    """
+
     @property
     def iso(self) -> str:
         return self.value.isoformat()
@@ -96,8 +118,17 @@ class ParsedDate:
 # Cada patrón declara qué grupos representan día, mes y año. El orden importa:
 # los más específicos van primero y los siguientes no pisan lo ya reconocido.
 _PATTERNS: list[tuple[re.Pattern, tuple[str, ...]]] = [
-    # 15/08/2026 · 15-08-26 · 15.08.2026
-    (re.compile(rf"\b(\d{{1,2}}){_SEP}(\d{{1,2}}){_SEP}(\d{{2,4}})\b"), ("d", "m", "y")),
+    # 15/08/2026 · 15-08-26 · 15.08.2026 · 15 08 2026
+    #
+    # Los dos separadores tienen que ser **el mismo**, y eso no es cosmética:
+    # nadie escribe una fecha mezclando. Aceptarlo hacía que `1 09/27` —un dígito
+    # suelto del lote pegado a un mes/año— se leyera como 1 de septiembre en vez
+    # de "septiembre de 2027", que es la lectura correcta y la que da el patrón
+    # de mes/año una vez que este deja de robársela.
+    (
+        re.compile(rf"\b(\d{{1,2}})({_SEP})(\d{{1,2}})\2(\d{{2,4}})\b"),
+        ("d", "sep", "m", "y"),
+    ),
     # 2026-08-15 (ISO)
     (re.compile(rf"\b(\d{{4}}){_SEP}(\d{{1,2}}){_SEP}(\d{{1,2}})\b"), ("y", "m", "d")),
     # 15 AGO 2026 · 15-ago-26
@@ -134,7 +165,16 @@ _FUZZY_MONTH_PATTERN = re.compile(r"\b(\d{1,2})[\s/.\-]*([A-Za-z0-9]{3})[\s/.\-]
 # La palabra clave queda fuera del tramo que se reporta como `matched_text`
 # (ver `_build_keyed_month_year`), para que el resto del scoring siga viendo la
 # fecha y no la etiqueta.
-_KEYWORD_ALT = r"vto|vence|vencimiento|cons\.?\s*pref\.?|consumir\s+preferentemente|best\s+before|v[t1i]0|vio"
+#
+# La `V` sola es la abreviatura del envase de farmacia (`L 1279 V 03/28`, donde
+# `L` es el lote). Va última en la alternancia para que `vto` y `vence` ganen
+# cuando están completos, y sólo cuenta como anuncio de este patrón: pedirle a
+# `has_keyword_before` que acepte "v" convertiría cualquier `v` cercana en un
+# anuncio, porque esa búsqueda es por subcadena.
+_KEYWORD_ALT = (
+    r"vto|vence|vencimiento|cons\.?\s*pref\.?|consumir\s+preferentemente"
+    r"|best\s+before|v[t1i]0|vio|v"
+)
 
 _KEYED_MONTH_YEAR = re.compile(
     rf"\b(?:{_KEYWORD_ALT})[^0-9A-Za-z]{{0,4}}(\d{{1,2}})\s*[/\-.]\s*(\d{{2}})(?!\d)",
@@ -212,7 +252,7 @@ def find_expiry_date(text: str, today: date | None = None) -> ParsedDate | None:
     if not candidates:
         return None
 
-    keyed = [c for c in candidates if has_keyword_before(text, c, EXPIRY_KEYWORDS)]
+    keyed = [c for c in candidates if announced_as_expiry(text, c)]
     if keyed:
         # Entre varias anunciadas, la más lejana: en un sello con elaboración y
         # vencimiento juntos, el vencimiento es siempre la posterior.
@@ -242,6 +282,17 @@ def find_purchase_date(text: str, today: date | None = None) -> ParsedDate | Non
     return past[0] if past else candidates[0]
 
 
+def announced_as_expiry(text: str, parsed: ParsedDate) -> bool:
+    """True si la fecha viene anunciada como vencimiento.
+
+    Dos formas de estarlo: que una palabra de `EXPIRY_KEYWORDS` la anteceda, o
+    que el patrón que la reconoció ya haya exigido la palabra clave para existir
+    —es el caso de mes/año con año de dos dígitos, que sin anuncio sería
+    indistinguible de un día y un mes—.
+    """
+    return parsed.keyed or has_keyword_before(text, parsed, EXPIRY_KEYWORDS)
+
+
 def has_keyword_before(text: str, parsed: ParsedDate, keywords: tuple[str, ...]) -> bool:
     """True si alguna keyword antecede a la fecha en su misma línea.
 
@@ -260,6 +311,9 @@ def _announced_as_production(text: str, parsed: ParsedDate) -> bool:
     Las keywords de producción son cortas (`env`, `elab`) y aparecen dentro de
     otras palabras, así que acá sí se exige límite de palabra.
     """
+    if parsed.keyed:
+        return False
+
     window = _window_before(text, parsed)
 
     if any(keyword in window for keyword in EXPIRY_KEYWORDS):
@@ -312,6 +366,7 @@ def _build_keyed_month_year(match: re.Match) -> ParsedDate | None:
         matched_text=match.string[match.start(1) : match.end(2)],
         start=match.start(1),
         day_precision=False,
+        keyed=True,
     )
 
 

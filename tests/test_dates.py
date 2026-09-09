@@ -188,3 +188,63 @@ def test_the_keyword_still_counts_as_announced():
 def test_production_date_does_not_win_over_expiry_in_two_digit_format():
     """`ELAB 05/26  VTO 05/27` tiene que dar el vencimiento, no la elaboración."""
     assert dates.find_expiry_date("ELAB 05/26 VTO 05/27", TODAY).iso == "2027-05-31"
+
+
+# ---------------------------------------------------------------------------
+# La `V` sola del envase de farmacia, y el separador que tiene que repetirse
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "texto,esperado",
+    [
+        # El sello de la caja de farmacia: `L` es el lote y `V` el vencimiento.
+        ("L 1279 V 03/28", "2028-03-31"),
+        ("V 12 2027 B", "2027-12-31"),
+        # Con la palabra entera sigue ganando la palabra entera.
+        ("Vence: 11 2027", "2027-11-30"),
+        ("Vencimiento: 09 2027", "2027-09-30"),
+    ],
+)
+def test_la_v_sola_anuncia_el_vencimiento(texto, esperado):
+    """Medido sobre las cajas de farmacia del conjunto: `V` es «vence».
+
+    Sólo cuenta para el patrón de mes/año, que ya exige el anuncio para existir.
+    Agregarla a `EXPIRY_KEYWORDS` no serviría —esa búsqueda es por subcadena y
+    cualquier `v` cercana contaría como anuncio— y por eso el patrón marca la
+    fecha como anunciada él mismo.
+    """
+    assert dates.find_expiry_date(texto, TODAY).iso == esperado
+
+
+def test_la_v_anunciada_no_se_penaliza_como_fecha_suelta():
+    parsed = dates.find_expiry_date("L 1279 V 03/28", TODAY)
+
+    assert parsed.keyed is True
+    assert dates.announced_as_expiry("L 1279 V 03/28", parsed) is True
+
+
+@pytest.mark.parametrize(
+    "texto,esperado",
+    [
+        ("15/08/2026", "2026-08-15"),
+        ("15-08-26", "2026-08-15"),
+        ("15.08.2026", "2026-08-15"),
+        ("15 08 2026", "2026-08-15"),
+    ],
+)
+def test_los_separadores_habituales_siguen_valiendo(texto, esperado):
+    assert dates.find_expiry_date(texto, TODAY).iso == esperado
+
+
+def test_un_digito_suelto_no_se_convierte_en_el_dia():
+    """`1 09/27` es un resto del lote pegado a un mes/año, no el 1 de septiembre.
+
+    Nadie escribe una fecha mezclando separadores, así que el patrón de día/mes/
+    año exige que los dos sean el mismo. Sin anuncio de vencimiento, `09/27`
+    queda sin interpretar — que es lo correcto: es indistinguible de un día y un
+    mes, y devolver una fecha falsa que el usuario podría aceptar es peor que no
+    devolver nada.
+    """
+    assert dates.find_expiry_date("1 09/27", TODAY) is None
+    # Con el anuncio sí se resuelve, y como mes/año.
+    assert dates.find_expiry_date("VTO 09/27", TODAY).iso == "2027-09-30"
