@@ -20,9 +20,26 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      # Todas las dependencias son livianas: este servicio coordina, parsea y
-      # puntúa, pero no ejecuta ningún motor. Ni OpenCV, ni pytesseract, ni
-      # PyTorch. Los motores se doblan con `respx` y Redis con `fakeredis`.
+      # La única dependencia de SISTEMA que tiene este servicio, y hace falta de
+      # verdad: `pyzbar` es un envoltorio sobre `libzbar`, así que sin la
+      # librería el paquete importa y revienta al buscar el `.so`. Es el mismo
+      # motivo por el que el `Dockerfile` la instala — el decodificador de
+      # códigos de barras corre acá, no en los servicios de motor —, y sin este
+      # paso fallan las ~40 pruebas que decodifican de verdad (las de dominio
+      # GS1, que son aritmética pura, pasan igual y esconden el problema).
+      #
+      # El nombre del paquete cambió en Ubuntu 24.04 por la transición de
+      # `time_t`: `libzbar0t64` allá, `libzbar0` en las anteriores. Se intentan
+      # los dos para no atarse a la versión del runner.
+      - name: Install libzbar
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libzbar0t64 || sudo apt-get install -y libzbar0
+
+      # Las dependencias de Python, en cambio, son todas livianas: este servicio
+      # coordina, parsea y puntúa, pero no ejecuta ningún motor. Ni OpenCV, ni
+      # pytesseract, ni PyTorch. Los motores se doblan con `respx` y Redis con
+      # `fakeredis`.
       - name: Install dependencies
         run: pip install -r requirements.txt
 

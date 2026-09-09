@@ -369,7 +369,7 @@ backoffice_backend  valida/monitorea los datos OCR cargados
 - Python 3.11 + FastAPI
 - Redis — cola de trabajos y caché de resultados
 - Pillow — valida el binario recibido y arma las variantes del decodificador
-- `pyzbar` / `libzbar0` — decodificación de códigos de barras
+- `pyzbar` / `libzbar0` — decodificación de códigos de barras. **`libzbar0` es una librería del sistema, no un paquete de pip**: `pyzbar` es sólo el envoltorio y sin ella importa pero falla al buscar el `.so`. La instalan el `Dockerfile` y el CI; para correr los tests a mano hace falta tenerla (`apt install libzbar0t64` en Ubuntu 24.04, `libzbar0` en las anteriores; en Windows viene con el wheel)
 - `python-dateutil` / `rapidfuzz` — normalización de fechas y similitud de texto
 - JWT HS256 — valida los tokens del servicio Auth (mismo `JWT_SECRET`)
 
@@ -611,6 +611,8 @@ pytest
 ```
 
 **406 tests, 95 % de cobertura, en unos 20 segundos.** No requieren los servicios de motor ni un Redis real: los motores se sustituyen por dobles con confianza controlada (y por `respx` cuando se verifica el contrato HTTP), y Redis por `fakeredis`. Lo que sí se ejercita de verdad es todo lo que este servicio aporta.
+
+> La única cosa que sí tiene que estar es **`libzbar0`**, porque el decodificador de códigos de barras corre en este servicio y se lo prueba decodificando de verdad. Sin ella fallan 57 tests con un error que no dice «falta una librería»: las pruebas de dominio GS1 —dígito verificador, prefijos de país, expansión de UPC-E— son aritmética pura y pasan igual, así que el resultado parece un problema del decodificador y no del entorno.
 
 | Archivo | Qué cubre |
 |---------|-----------|
