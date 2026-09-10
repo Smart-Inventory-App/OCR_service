@@ -2,6 +2,26 @@
 
 **Coordinador** del módulo de **Reconocimiento Óptico de Caracteres**. Lee etiquetas de producto, sellos de vencimiento y comprobantes, y devuelve los campos estructurados que el Core necesita para dar de alta inventario automáticamente, con una **confianza por campo** que indica cuándo hace falta que el usuario confirme el dato.
 
+> ### Estado del Módulo
+>
+> **Motores en producción:** Tesseract (principal) y **PaddleOCR en dos réplicas** (respaldo).
+> El modo híbrido es `tesseract → paddleocr`.
+>
+> **EasyOCR estuvo levantado y ya no.** Fue el segundo motor del módulo, en
+> `ocr_service_easyocr` y en el puerto **8006**, y participó de la comparativa que
+> decidió cuál iba de respaldo. Se retiró en septiembre de 2026: como el híbrido
+> resuelve con Tesseract y sólo escala a PaddleOCR, EasyOCR no participaba de ningún
+> camino de producción — medido con `docker stats` durante una tanda de carga, se
+> quedaba en **0,1 % de CPU sosteniendo 561 MB**. Su lugar lo ocupa hoy la segunda
+> réplica de PaddleOCR, que sí era el cuello de botella real y con la que el módulo
+> pasó de 1,8 a 3,2 documentos pesados por minuto.
+>
+> El repositorio `ocr_service_easyocr` **se conserva**: el contrato del motor no
+> cambió, así que sigue siendo una implementación válida y comparable. Volver a
+> incorporarlo es levantarlo y sumarlo a `CONCRETE_ENGINES` y a la configuración del
+> coordinador. Sus resultados en la comparativa están más abajo y los datos crudos en
+> `bench/results/`.
+
 Este servicio **no ejecuta ningún motor OCR**. Los motores viven en sus propios repositorios y este los coordina:
 
 ```
@@ -12,19 +32,22 @@ Este servicio **no ejecuta ningún motor OCR**. Los motores viven en sus propios
                      │     parsing de campos       │
                      │     confianza y umbrales    │
                      │     cola, caché, storage    │
+                     │     códigos de barras (ZBar)│
                      └──────────────┬──────────────┘
                                     │
                              POST /engine/run
                                     │
-            ┌───────────────────────┼──────────────────────┐
-            │                       │                      │
-            ▼                       ▼                      ▼
-    ocr_service_tesseract   ocr_service_easyocr    ocr_service_paddleocr
-    puerto 8005             puerto 8006            puerto 8007
-    (rápido, liviano)       (preciso, pesado)      (el más preciso, pesado)
+        ┌───────────────────────────┼───────────────────────────┐
+        ▼                           ▼                           ▼
+ ocr_service_tesseract      ocr_service_paddleocr     ocr_service_paddleocr_2
+    puerto 8005                 puerto 8007                 puerto 8017
+  motor principal           motor de respaldo           réplica del respaldo
+ (rápido, liviano)           (preciso, pesado)            (misma imagen)
 ```
 
-Los tres motores son los que la propuesta manda comparar. Ninguno de ellos sabe qué documento está mirando: reciben una imagen y una transformación, y devuelven palabras con su caja y su confianza.
+**Dos motores, y el de respaldo replicado.** Ninguno sabe qué documento está mirando: reciben una imagen y una transformación, y devuelven palabras con su caja y su confianza. El coordinador reparte las peticiones entre las réplicas de PaddleOCR por turno y se cae a la otra si una no responde.
+
+El **código de barras es la excepción**: no baja a ningún motor. Se decodifica con ZBar dentro de este servicio, porque no se lee reconociendo caracteres sino decodificando una simbología, y el resultado trae su propio dígito verificador.
 
 | Caso | `doc_type` | Campos que extrae |
 |------|-----------|-------------------|
@@ -55,9 +78,9 @@ Los criterios de aceptación de la propuesta (`nombre de producto` y `fecha de v
 
 ### 2. Modularización de los Motores OCR
 
-**Antes.** `ocr_service` importaba `pytesseract` y `easyocr`, y su imagen incluía el binario de Tesseract, su paquete de idioma, OpenCV y PyTorch.
+**Antes.** `ocr_service` ejecutaba los motores en su propio proceso, y su imagen incluía el binario de Tesseract, su paquete de idioma, OpenCV y PyTorch.
 
-**El problema:** Un contenedor de **2,5 GB** que reservaba **~1,3 GB de memoria** para tener EasyOCR cargado, aunque la mayoría de las peticiones se resolvieran con Tesseract en medio segundo. Cada cambio en un parser obligaba a reconstruir y redesplegar todo eso. **Ahora:** Tres repositorios con una división de responsabilidades explícita:
+**El problema:** Un contenedor de **2,5 GB** que reservaba **~1,3 GB de memoria** para tener el motor pesado cargado, aunque la mayoría de las peticiones se resolvieran con Tesseract en medio segundo. Cada cambio en un parser obligaba a reconstruir y redesplegar todo eso. **Ahora:** Repositorios con una división de responsabilidades explícita:
 
 Los servicios de motor reciben una imagen y una transformación, y devuelven palabras con su caja y su confianza. No saben qué documento están mirando.
 
@@ -119,12 +142,12 @@ Y cuando sí se llama al respaldo, se le ahorra la búsqueda de orientación: se
 
 **Antes.** De los tres motores que nombra la propuesta estaban implementados dos. PaddleOCR quedaba pendiente y la comparativa, incompleta.
 
-**El problema:** con Tesseract y EasyOCR el módulo **no llegaba a los dos criterios de aceptación a la vez** sobre fotos reales. El híbrido acertaba los ocho campos clave, pero con confianzas de 0,57–0,89: la mitad de los documentos no superaba el 0,70 por documento y terminaba en revisión manual igual. Subir la confianza a mano habría sido mentirle al usuario; hacía falta un motor que **leyera mejor de verdad**.
+**El problema:** con los motores livianos el módulo **no llegaba a los dos criterios de aceptación a la vez** sobre fotos reales. El híbrido acertaba los ocho campos clave, pero con confianzas de 0,57–0,89: la mitad de los documentos no superaba el 0,70 por documento y terminaba en revisión manual igual. Subir la confianza a mano habría sido mentirle al usuario; hacía falta un motor que **leyera mejor de verdad**.
 
 **Ahora.** [`ocr_service_paddleocr`](../ocr_service_paddleocr) expone el mismo contrato que los otros dos, en el puerto 8007. Dos resultados medidos:
 
 - **Es el único motor que pasa los dos criterios por sí solo** (87,5 % en campos clave, 100 % de documentos sobre 0,70), y con él de respaldo el híbrido también los pasa.
-- **Lee `27FEB27` sin que haya que repararlo.** Es el sello que Tesseract leía `27FRRE` y EasyOCR `27FEBZ7`; como no hay reparación, la confianza no se penaliza y el documento supera el umbral en vez de quedar en 0,57.
+- **Lee `27FEB27` sin que haya que repararlo.** Es el sello que Tesseract leía `27FRRE`; como no hay reparación, la confianza no se penaliza y el documento supera el umbral en vez de quedar en 0,57.
 
 Incorporarlo costó **tres líneas** en este repositorio —una URL, una rama en la *factory*, una entrada en `CONCRETE_ENGINES`— y ni un cambio en los parsers, el scoring, las rutas o la estrategia. Es la validación del punto 2: la modularización se pagó sola la primera vez que hubo que agregar un motor.
 
@@ -170,7 +193,6 @@ Fotos de celular con fondo doméstico, iluminación despareja y envases brillant
 | Motor | Clave | Todos | Docs ≥70% | Latencia | Gate |
 |-------|-------|-------|-----------|----------|------|
 | `tesseract` | 53,3 % (8/15) | 37,5 % | 7,1 % | 4,2 s | NO |
-| `easyocr` | 69,2 % (9/13) | 59,1 % | 28,6 % | 11,1 s | NO |
 | **`paddleocr`** | **86,7 % (13/15)** | **87,5 %** | **92,9 %** | 19,6 s | casi |
 | **`hybrid`** (Tesseract + PaddleOCR) | **86,7 % (13/15)** | **87,5 %** | **92,9 %** | 19,0 s | casi |
 
@@ -179,12 +201,9 @@ Por campo:
 | Motor | `nombre_producto` | `fecha_vencimiento` | `marca` | Factura (`fecha_compra`·`total`·`comercio`·ítems) |
 |-------|-------------------|---------------------|---------|---------------------------------------------------|
 | `tesseract` | 3/7 | 4/6 | 0/7 | 0 · 1 · 0 · 0 |
-| `easyocr` | 5/7 | 3/4 | 4/7 | 0 · 0 · 0 · 0 |
 | **`paddleocr`** | **6/7** | **5/6** | **6/7** | **1 · 1 · 1 · 1** |
 
-**PaddleOCR supera el 85 % en campos clave** sobre casi el doble de documentos que la medición anterior, y con los tres tipos de documento representados. Los dos motores livianos quedan lejos: sobre fotos reales Tesseract no llega ni a la mitad.
-
-> **Los dos fallos de EasyOCR** son del contenedor, no del motor: se quedó sin memoria durante la corrida y dejó de responder a dos peticiones (Docker Desktop reparte ~2 GB entre *todos* los contenedores y con los dos motores pesados arriba no alcanza). Sus porcentajes están calculados sobre los 12 documentos que sí completó, así que **no son comparables** con los de los otros tres. Es también el motivo por el que el coordinador propaga un motor caído como `502` en vez de devolver una lectura vacía.
+**PaddleOCR supera el 85 % en campos clave** sobre casi el doble de documentos que la medición anterior, y con los tres tipos de documento representados. Tesseract queda lejos: sobre fotos reales no llega ni a la mitad.
 
 Los tres campos clave que ningún motor resuelve:
 
@@ -203,11 +222,10 @@ Es el único conjunto que cubre los **tres** tipos de documento: incluye dos tic
 | Motor | Clave | Todos | Docs ≥70% | Latencia | Gate |
 |-------|-------|-------|-----------|----------|------|
 | `tesseract` | 100 % | 100 % | 88,9 % | 674 ms | NO |
-| `easyocr` | 100 % | 100 % | 88,9 % | 1237 ms | NO |
 | `paddleocr` | 100 % | 95,0 % | **100 %** | 4324 ms | **OK** |
 | **`hybrid`** | **100 %** | **100 %** | **100 %** | **1474 ms** | **OK** |
 
-Sobre documentos limpios el híbrido resuelve casi todo con Tesseract y sólo paga el motor caro donde hace falta: **pasa el gate completo en 1,5 s por documento**, doce veces más rápido que sobre las fotos reales. Los ítems del ticket (`fecha_compra` 2/2, `items` 2/2, `total` 2/2) salen perfectos en los cuatro motores.
+Sobre documentos limpios el híbrido resuelve casi todo con Tesseract y sólo paga el motor caro donde hace falta: **pasa el gate completo en 1,5 s por documento**, doce veces más rápido que sobre las fotos reales. Los ítems del ticket (`fecha_compra` 2/2, `items` 2/2, `total` 2/2) salen perfectos en todos los motores.
 
 El conjunto sintético sirve para verificar que el pipeline funciona de punta a punta; **no reemplaza al dataset real**, porque una imagen generada no tiene el ruido ni la iluminación de una foto — se ve en que Tesseract pasa de 100 % acá a 62,5 % sobre fotos.
 
@@ -219,8 +237,7 @@ Medido con `docker stats` sobre los contenedores en reposo y en proceso:
 |---|---|---|---|
 | `ocr_service` | ~770 MB | ~30 MB | — (coordina) |
 | `ocr_service_tesseract` | ~1,05 GB | ~70 MB | 0,2–0,8 s por intento |
-| `ocr_service_easyocr` | ~2,58 GB | ~350 MB | 3–5 s por intento |
-| `ocr_service_paddleocr` | ~2,68 GB | ~350 MB | 4–15 s por intento |
+| `ocr_service_paddleocr` (x2) | ~2,68 GB | ~350 MB c/u | 4–15 s por intento |
 
 ---
 
@@ -276,7 +293,6 @@ class OCREngine(Protocol):
 ```
 
 - **`tesseract`** — rápido y liviano. Da **confianza por palabra**, que es la base del cálculo de `document_confidence`.
-- **`easyocr`** — basado en deep learning. Mucho mejor en envases curvos, brillantes y con tipografías de fantasía; mucho más lento y pesado.
 - **`paddleocr`** — el más preciso de los tres sobre fotos reales, y el único que pasa los dos criterios de aceptación por sí solo. Detecta **regiones de texto** en vez de palabras, así que a veces devuelve dos palabras pegadas.
 - **`hybrid`** — el "enfoque híbrido" que la propuesta no descarta: Tesseract como principal y, cuando su lectura no alcanza, PaddleOCR de respaldo.
 
@@ -292,9 +308,9 @@ También se puede elegir **por petición**, que es lo que usa el banco de prueba
 { "image_url": "...", "doc_type": "expiry_date", "engine": "hybrid" }
 ```
 
-> **Por qué conviene combinarlos.** Los motores son **complementarios, no redundantes**. Sobre el sello de la harina, Tesseract acierta y EasyOCR no; sobre el de la leche, al revés. Sobre la etiqueta de la harina, Tesseract no levanta nada y los otros dos la leen entera. Combinar recupera lo mejor de cada uno — que es precisamente el argumento con que la propuesta deja abierta esta opción.
+> **Por qué conviene combinarlos.** Los motores son **complementarios, no redundantes**. Sobre la etiqueta de la harina, Tesseract no levanta nada y PaddleOCR la lee entera; sobre algunos sellos de matriz de puntos pasa al revés. Combinar recupera lo mejor de cada uno — que es precisamente el argumento con que la propuesta deja abierta esta opción.
 >
-> Cuál va de respaldo **no se eligió, se midió**: con EasyOCR el híbrido acierta más campos clave pero con confianzas bajo el umbral, y con PaddleOCR acierta uno menos y pasa el gate. Es una variable (`HYBRID_FALLBACK_ENGINE`) y el benchmark es el que la decide; si mañana el dataset crece y la respuesta cambia, se cambia el `.env` y no el código.
+> Cuál va de respaldo **no se eligió, se midió**. Es una variable (`HYBRID_FALLBACK_ENGINE`) y el benchmark es el que la decide; si mañana el dataset crece y la respuesta cambia, se cambia el `.env` y no el código.
 
 ### 3. Parsing
 
@@ -359,8 +375,10 @@ backoffice_backend  valida/monitorea los datos OCR cargados
 | **`ocr_service`** | **`8003`** |
 | `image_storage_service` | `8004` |
 | `ocr_service_tesseract` | `8005` |
-| `ocr_service_easyocr` | `8006` |
 | `ocr_service_paddleocr` | `8007` |
+| `ocr_service_paddleocr_2` | `8017` |
+
+> El **8006** era el de `ocr_service_easyocr` y hoy está libre: ese motor se retiró del módulo (ver [Estado del Módulo](#servicio-de-ocr--smart-inventory) al principio). Las dos réplicas de PaddleOCR publican el mismo puerto interno `8007`; lo que cambia es el puerto del host, para poder probar cada una por separado.
 
 ---
 
@@ -373,7 +391,7 @@ backoffice_backend  valida/monitorea los datos OCR cargados
 - `python-dateutil` / `rapidfuzz` — normalización de fechas y similitud de texto
 - JWT HS256 — valida los tokens del servicio Auth (mismo `JWT_SECRET`)
 
-**Ni OpenCV, ni pytesseract, ni easyocr, ni PyTorch.** Este servicio coordina, parsea y puntúa; no reconoce.
+**Ni OpenCV, ni pytesseract, ni PyTorch.** Este servicio coordina, parsea y puntúa; no reconoce.
 
 ---
 
@@ -392,7 +410,7 @@ Sube la foto como imagen temporal, encola el job y la descarta al terminar.
 | `file` | archivo (`jpeg`/`png`/`webp`) | sí | — |
 | `doc_type` | `product_label` \| `expiry_date` \| `receipt` \| `barcode` | no | `product_label` |
 | `lang` | string | no | `spa` |
-| `engine` | `tesseract` \| `easyocr` \| `paddleocr` \| `hybrid` | no | el de `OCR_ENGINE` |
+| `engine` | `tesseract` \| `paddleocr` \| `hybrid` | no | el de `OCR_ENGINE` |
 
 **Respuesta `202`:** `{ "job_id": "9f2c1a...", "status": "queued" }`
 
@@ -417,7 +435,9 @@ Para cuando el Core ya tiene la URL de Cloudinary.
 
 ### `GET /ocr/jobs/{job_id}` — Estado y Resultado
 
-La App hace *polling* contra este endpoint.
+La App hace *polling* contra este endpoint (medio segundo entre consultas es suficiente: los documentos livianos terminan en 2-3 s y los pesados en decenas).
+
+**Sólo lo ve quien lo encoló.** La lectura de una foto es un dato del usuario —el nombre, la marca y el vencimiento de lo que compró, o los renglones enteros de un ticket—, así que un token válido no alcanza: tiene que ser el mismo `sub` que creó el job. Un `job_id` puede filtrarse por un log o el historial del cliente, y quien lo tenga no debería poder leer el ticket de otro. Un job ajeno responde `404` y no `403`, para no confirmar siquiera que existe.
 
 ```jsonc
 {
@@ -465,19 +485,27 @@ Público. Lo usa el banco de pruebas para no ofrecer un motor apagado.
 
 ```json
 [
-  { "name": "tesseract", "url": "http://tpp_ocr_tesseract:8005", "available": true,
-    "version": "5.5.0", "languages": ["eng","osd","spa"], "supports_preprocessing": true },
-  { "name": "easyocr", "url": "http://tpp_ocr_easyocr:8006", "available": true,
-    "version": "1.7.2", "languages": ["eng","spa"], "supports_preprocessing": false },
-  { "name": "paddleocr", "url": "http://tpp_ocr_paddleocr:8007", "available": true,
-    "version": "3.7.0", "languages": ["eng","spa"], "supports_preprocessing": false }
+  { "name": "tesseract", "url": "http://tpp_ocr_tesseract:8005",
+    "replicas": ["http://tpp_ocr_tesseract:8005"],
+    "available": true, "version": "5.5.0",
+    "languages": ["eng","osd","spa"], "supports_preprocessing": true },
+  { "name": "paddleocr", "url": "http://tpp_ocr_paddleocr:8007",
+    "replicas": ["http://tpp_ocr_paddleocr:8007", "http://tpp_ocr_paddleocr_2:8007"],
+    "available": true, "version": "3.7.0",
+    "languages": ["eng","spa"], "supports_preprocessing": false }
 ]
 ```
+
+### `POST /ocr/maintenance/purge-temp` — Limpieza de Temporales
+
+Borra las imágenes de `bazaar/ocr-temp` que vencieron sin que nadie las descartara. El worker descarta la suya en un `finally`, así que el caso normal ya está cubierto: esto es para cuando el proceso muere en medio de un job (un OOM, un redeploy). Vive acá y no en quien lo llama porque el storage es dependencia de este servicio.
+
+**Respuesta:** `{ "purged": 3 }`. Lo expone el backoffice como `POST /admin/ocr/temp/purge`.
 
 ### `GET /ocr/livez` · `GET /ocr/readyz`
 
 - `livez` → `{ "status": "ok" }`. Sin dependencias.
-- `readyz` → verifica Redis **y** que el motor configurado responda. Se comprueba el motor configurado, no todos: que EasyOCR esté apagado no debería marcar el servicio como caído si el que se usa es Tesseract.
+- `readyz` → verifica Redis **y** que el motor configurado responda. Se comprueba el motor configurado, no todos: que un motor que no se usa esté apagado no debería marcar el servicio como caído.
 
 ---
 
@@ -499,10 +527,6 @@ Los motores pesados son opcionales, pero el híbrido por defecto usa PaddleOCR d
 
 ```bash
 cd ../ocr_service_paddleocr && cp .env.example .env && docker-compose up -d --build
-```
-
-```bash
-cd ../ocr_service_easyocr && cp .env.example .env && docker-compose up -d --build
 ```
 
 **2. Levantar el coordinador** (API + worker + Redis):
@@ -541,8 +565,7 @@ Apuntar los motores, Redis y el storage a `localhost` en el `.env`:
 
 ```env
 TESSERACT_SERVICE_URL=http://localhost:8005
-EASYOCR_SERVICE_URL=http://localhost:8006
-PADDLEOCR_SERVICE_URL=http://localhost:8007
+PADDLEOCR_SERVICE_URL=http://localhost:8007,http://localhost:8017
 REDIS_URL=redis://localhost:6379/0
 STORAGE_SERVICE_URL=http://localhost:8004
 ```
@@ -570,7 +593,7 @@ Página servida por el propio servicio. Replica el patrón de autenticación del
 Permite subir una imagen y elegir:
 
 - el **tipo de documento** — los tres, con una ayuda que explica qué foto espera cada uno;
-- el **motor** — `tesseract`, `easyocr`, `paddleocr` o `hybrid`. La tabla **Motores** muestra cuáles están arriba y con qué versión, y **deshabilita en el selector los que están apagados**, para que no se pueda pedir un motor que no va a correr;
+- el **motor** — `tesseract`, `paddleocr` o `hybrid`. La tabla **Motores** muestra cuáles están arriba y con qué versión, y **deshabilita en el selector los que están apagados**, para que no se pueda pedir un motor que no va a correr;
 - el **modo** — sincrónico o asincrónico, este último con *polling* real del job.
 
 El resultado muestra los campos con barras de confianza coloreadas según los umbrales (verde ≥ 0,85, ámbar ≥ 0,70, rojo por debajo) y, además de la confianza y el tiempo, **el motor cuya lectura se conservó, el giro aplicado y cuántos intentos hicieron falta**. En modo híbrido el motor que figura puede no ser el que se pidió: es la forma de ver cuál de los dos ganó de verdad.
@@ -640,10 +663,9 @@ Los tres repositorios de motor tienen sus propias suites, que cubren la cadena d
 | Repositorio | Tests | Cobertura |
 |---|---|---|
 | `ocr_service_tesseract` | 71 | 96 % |
-| `ocr_service_easyocr` | 42 | 92 % |
 | `ocr_service_paddleocr` | 46 | 92 % |
 
-`ocr_service_easyocr` y `ocr_service_paddleocr` incluyen `test_bandas_reales.py`, que ejercita la detección de bandas de texto sobre **una foto de envase real** —la única imagen versionada en cada uno, de 103 KB— sin cargar el modelo. Son los dos motores a los que el coordinador les manda recortes, y esa función no se puede probar con un rectángulo dibujado.
+`ocr_service_paddleocr` incluye `test_bandas_reales.py`, que ejercita la detección de bandas de texto sobre **una foto de envase real** —la única imagen versionada del repositorio, de 103 KB— sin cargar el modelo. Es el motor al que el coordinador le manda recortes, y esa función no se puede probar con un rectángulo dibujado.
 
 **565 tests en total** en los cuatro repositorios del módulo, todos en el CI y sin ningún motor instalado.
 
@@ -698,7 +720,6 @@ El consumo de memoria ya no se mide desde acá: cada motor es un contenedor apar
 ```
 Motor                   Clave    Todos   Docs >=70%     Latencia   Intentos   Fallos    Gate
 tesseract              62.5%    41.7%        12.5%       4327 ms        5.5        0      NO
-easyocr                75.0%    66.7%        37.5%       9218 ms        2.4        0      NO
 paddleocr              87.5%    83.3%       100.0%      18285 ms        1.8        0      OK
 hybrid                100.0%    83.3%        50.0%       9858 ms        6.9        0      NO
 
@@ -777,11 +798,10 @@ Todas las variables, con sus defaults, están en [`.env.example`](.env.example).
 |----------|---------|----------|
 | `JWT_SECRET` | — | **debe coincidir con el del servicio Auth** |
 | `TESSERACT_SERVICE_URL` | `http://tpp_ocr_tesseract:8005` | dónde vive el motor liviano |
-| `EASYOCR_SERVICE_URL` | `http://tpp_ocr_easyocr:8006` | dónde vive un motor pesado |
-| `PADDLEOCR_SERVICE_URL` | `http://tpp_ocr_paddleocr:8007` | dónde vive el otro |
+| `PADDLEOCR_SERVICE_URL` | `http://tpp_ocr_paddleocr:8007,`<br>`http://tpp_ocr_paddleocr_2:8007` | dónde vive el de respaldo. **Admite varias separadas por coma**: el coordinador las reparte por turno |
 | `ENGINE_API_KEY` | *(vacía)* | clave compartida con los motores |
-| `ENGINE_TIMEOUT_SECONDS` | `120` | EasyOCR tarda segundos por documento |
-| `OCR_ENGINE` | `hybrid` | `tesseract` \| `easyocr` \| `paddleocr` \| `hybrid` |
+| `ENGINE_TIMEOUT_SECONDS` | `120` | PaddleOCR tarda segundos por documento |
+| `OCR_ENGINE` | `hybrid` | `tesseract` \| `paddleocr` \| `hybrid` |
 | `FIELD_CONFIDENCE_THRESHOLD` | `0.85` | umbral por campo → dispara `needs_review` |
 | `DOCUMENT_CONFIDENCE_THRESHOLD` | `0.70` | umbral por documento |
 | `HYBRID_FALLBACK_THRESHOLD` | `0.70` | confianza bajo la cual se llama al respaldo |
@@ -793,6 +813,47 @@ Todas las variables, con sus defaults, están en [`.env.example`](.env.example).
 | `PREPROCESS_*` | ver `.env.example` | cada paso de la cadena para etiquetas y tickets |
 | `REDIS_URL` | `redis://redis:6379/0` | cola y caché |
 | `STORAGE_SERVICE_URL` | `http://tpp_storage_service:8000` | subir/descartar la imagen temporal |
+
+---
+
+## Concurrencia y Producción
+
+El reconocimiento tarda: un ticket puede llevar 45 s. Con varios clientes escaneando a la vez eso importa más que la velocidad de un documento suelto, y hay tres decisiones que lo gobiernan.
+
+**El worker procesa `WORKER_CONCURRENCY` jobs a la vez (3 por defecto).** En 1 —como estaba— la cola es estrictamente serie y el costo lo paga el último de la fila: medido con cuatro clientes simultáneos, el primero terminó a los 20 s y el cuarto a los 168 s, aunque ninguno tenía más de 65 s de trabajo propio.
+
+Lo que la concurrencia **no** hace es multiplicar el rendimiento total: la inferencia corre en los servicios de motor y es CPU, así que tres jobs pesados a la vez se estorban entre sí (la misma tanda pasó de 168 s a 140 s, no a 60 s). Lo que sí elimina es el **bloqueo por cabeza de fila**, que es lo que se nota: medido, un código de barras enviado detrás de tres documentos pesados pasó de esperar toda la fila a resolverse en **2,8 s**. Para más rendimiento real conviene levantar otro worker —o darles más CPU a los motores— antes que subir este número, que en un entorno con poca memoria es lo que hace que PaddleOCR muera por OOM.
+
+**Redis persiste.** Acá viven la cola y el estado de los jobs, no sólo la caché: sin volumen, un reinicio de Redis deja al usuario con su escaneo colgado en `processing` para siempre. El `docker-compose` lo levanta con `--appendonly yes` sobre un volumen.
+
+**PaddleOCR va replicado.** Es el respaldo del híbrido, así que casi todo documento difícil termina ahí, y medido con `docker stats` una sola instancia se clava en ~650 % de CPU mientras el resto del módulo mira: era el cuello de botella real del sistema. La forma de ensancharlo no era más concurrencia en el worker —eso ya estaba en su punto— sino otra instancia del motor. El coordinador las reparte por turno (`PADDLEOCR_SERVICE_URL` acepta varias URLs separadas por coma) y se cae a la otra si una no responde, así que la réplica sirve tanto para repartir carga como para sobrevivir a un redeploy.
+
+Con dos réplicas hay que **repartirles los núcleos**: sin tope, cada una abre tantos hilos como CPUs ve y las dos juntas piden más de lo que hay. `CPU_THREADS` en el repositorio del motor las acota; con 12 núcleos, 5 para cada una deja margen para Tesseract. Medido sobre la misma tanda de seis documentos:
+
+| configuración | tiempo | rendimiento |
+|---|---|---|
+| 1 réplica, worker en serie | 200,3 s | 1,8 doc/min |
+| 1 réplica, worker con 3 | 161,9 s | 2,2 doc/min |
+| 2 réplicas, worker con 3 | 128,2 s | 2,8 doc/min |
+| **2 réplicas con hilos acotados, worker con 3** | **111,6 s** | **3,2 doc/min** |
+
+**+79 % contra la configuración original.** Sin acotar los hilos el salto es la mitad: las dos réplicas se pelean la CPU y el rendimiento total sube mucho menos de lo que debería.
+
+**La cola tiene tope y los usuarios tienen cupo.** Al ritmo de arriba, 15 documentos en espera ya son siete minutos: aceptar el número 16 sería mentirle al usuario, así que a partir de `MAX_QUEUE_DEPTH` se responde `429` con `Retry-After`. Y cada usuario tiene un cupo por minuto **distinto según el tipo**, porque no cuestan lo mismo:
+
+| tipo | cupo por minuto | costo real |
+|---|---|---|
+| `barcode` | 60 | 0,2 s, sin tocar un motor |
+| `product_label` · `expiry_date` | 10 | 12–40 s en los motores |
+| `receipt` | 4 | 40–140 s en los motores |
+
+Es una ventana fija de un minuto, no un token bucket: el usuario puede gastar todo su cupo de golpe, que es justo lo que necesita un comercio escaneando una entrega. El freno de capacidad real es el tope de cola; el cupo es contra el abuso y contra un cliente con un bug de reintentos. El código de barras no cuenta para el tope de cola porque no pasa por ella.
+
+**Y el que espera sabe cuánto falta.** `GET /ocr/jobs/{id}` devuelve `queue_position` y `estimated_wait_seconds` mientras el job está en `queued`, para que la App pueda decir «3º de 7, ~2 min» en vez de mostrar un spinner sin información.
+
+**Y las lecturas bloqueantes necesitan su propio plazo de socket.** `REDIS_SOCKET_TIMEOUT_SECONDS` no es cosmético: sin él, `redis-py` deriva el plazo de lectura del propio timeout del `BLPOP`, sin margen. Con una sola espera la respuesta llega justo a tiempo; con varias en paralelo la latencia del loop empuja todas las lecturas más allá del plazo y el worker entra en un ciclo de reintentos sin consumir un solo job.
+
+> Ese último problema apareció solo, en un `docker compose build` que no cambió una línea de código: `requirements.txt` no fijaba versiones y `redis` saltó a 8.x. Por eso ahora **están todas fijas**. Para subir una: se sube a mano, se corre `pytest` y se corre `pytest -c pytest-integration.ini`.
 
 ---
 
