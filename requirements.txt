@@ -1,18 +1,19 @@
-fastapi
-uvicorn[standard]
-pydantic-settings
-python-dotenv
-python-jose[cryptography]      # validación JWT (igual que auth/storage)
-httpx                          # descarga de imágenes + llamadas a los motores
-python-multipart               # subida binaria (POST /ocr/scan)
-Pillow                         # validación de imágenes + variantes del decodificador
-pyzbar                         # decodificación de códigos de barras (envoltorio de libzbar)
-redis                          # cola de trabajos + caché de resultados
-python-dateutil                # normalización de fechas (vencimiento/compra)
-rapidfuzz                      # similitud de nombres y de meses mal leídos
-pytest
-pytest-asyncio
-pytest-cov
-fakeredis                      # Redis en memoria para los tests
-respx                          # doble de los servicios de motor en los tests
-python-barcode                 # genera códigos de barras reales en los tests
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+python-jose[cryptography]==3.5.0
+httpx==0.28.1
+python-multipart==0.0.32
+Pillow==12.3.0
+pyzbar==0.1.9
+redis==8.1.0
+python-dateutil==2.9.0.post0
+rapidfuzz==3.14.6
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+fakeredis==2.37.1
+respx==0.23.1
+python-barcode==0.16.1

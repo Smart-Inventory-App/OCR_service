@@ -8,12 +8,11 @@ services:
     env_file:
       - .env
     environment:
-      # Dentro de tpp-net los hosts son los nombres de contenedor, no localhost.
       REDIS_URL: redis://redis:6379/0
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-3}
       STORAGE_SERVICE_URL: http://tpp_storage_service:8000
       TESSERACT_SERVICE_URL: http://tpp_ocr_tesseract:8005
-      EASYOCR_SERVICE_URL: http://tpp_ocr_easyocr:8006
-      PADDLEOCR_SERVICE_URL: http://tpp_ocr_paddleocr:8007
+      PADDLEOCR_SERVICE_URL: http://tpp_ocr_paddleocr:8007,http://tpp_ocr_paddleocr_2:8007
     depends_on:
       redis:
         condition: service_healthy
@@ -28,16 +27,15 @@ services:
 
   worker:
     build: .
-    container_name: tpp_ocr_worker
     command: python -m app.worker
     env_file:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-3}
       STORAGE_SERVICE_URL: http://tpp_storage_service:8000
       TESSERACT_SERVICE_URL: http://tpp_ocr_tesseract:8005
-      EASYOCR_SERVICE_URL: http://tpp_ocr_easyocr:8006
-      PADDLEOCR_SERVICE_URL: http://tpp_ocr_paddleocr:8007
+      PADDLEOCR_SERVICE_URL: http://tpp_ocr_paddleocr:8007,http://tpp_ocr_paddleocr_2:8007
     depends_on:
       redis:
         condition: service_healthy
@@ -48,6 +46,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: tpp_ocr_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     networks:
       - tpp-net
     restart: unless-stopped
@@ -57,11 +58,9 @@ services:
       timeout: 3s
       retries: 5
 
-# Los motores NO se levantan desde acá: cada uno tiene su repositorio y su
-# compose (`ocr_service_tesseract`, `ocr_service_easyocr`,
-# `ocr_service_paddleocr`). Se comunican por la
-# red externa `tpp-net`, así que se pueden encender, apagar y redesplegar sin
-# tocar el coordinador.
+volumes:
+  redis_data:
+
 networks:
   tpp-net:
     external: true

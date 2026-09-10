@@ -25,24 +25,83 @@ class Settings(BaseSettings):
     # Cada motor es un servicio aparte, con su propio repositorio e imagen. Este
     # servicio no ejecuta ningún motor: los coordina.
     TESSERACT_SERVICE_URL: str = "http://tpp_ocr_tesseract:8005"
-    EASYOCR_SERVICE_URL: str = "http://tpp_ocr_easyocr:8006"
-    PADDLEOCR_SERVICE_URL: str = "http://tpp_ocr_paddleocr:8007"
+    # PaddleOCR va replicado y acepta varias URLs separadas por coma: el
+    # coordinador las reparte por turno y se cae a la otra si una no responde.
+    # Es el respaldo del híbrido, así que casi todo documento difícil termina
+    # ahí, y una sola instancia satura sus núcleos mucho antes que el resto del
+    # módulo.
+    PADDLEOCR_SERVICE_URL: str = (
+        "http://tpp_ocr_paddleocr:8007,http://tpp_ocr_paddleocr_2:8007"
+    )
 
     # Clave compartida con los servicios de motor. Vacía = sin control de acceso.
     ENGINE_API_KEY: str = ""
 
-    # EasyOCR y PaddleOCR tardan segundos por documento: necesitan más margen que
-    # Tesseract.
+    # PaddleOCR tarda segundos por documento: necesita más margen que Tesseract.
     ENGINE_TIMEOUT_SECONDS: float = 120.0
 
-    OCR_ENGINE: str = "hybrid"  # tesseract | easyocr | paddleocr | hybrid
+    OCR_ENGINE: str = "hybrid"  # tesseract | paddleocr | hybrid
     OCR_LANG: str = "spa"
 
     # Redis (cola de trabajos + caché de resultados)
     REDIS_URL: str = "redis://redis:6379/0"
+    # Tiene que ser holgadamente mayor que el timeout del `BLPOP` del worker
+    # (5 s): es el plazo de lectura del socket, no el de la espera en la cola.
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 30.0
     JOB_TTL_SECONDS: int = 86400
     QUEUE_KEY: str = "ocr:queue"
     CACHE_TTL_SECONDS: int = 86400
+
+    # Cuántos jobs procesa el worker a la vez.
+    #
+    # En 1 —como estaba— la cola es estrictamente serie y el costo lo paga el
+    # último de la fila: medido con cuatro clientes escaneando a la vez, el
+    # primero terminó a los 20 s y el cuarto a los 168 s, aunque ninguno tardaba
+    # más de 65 s por su cuenta. Y el orden es de llegada, así que un código de
+    # barras —que se resuelve en 200 ms sin tocar un motor— puede quedar detrás
+    # de tres tickets.
+    #
+    # No es paralelismo gratis: los motores son servicios aparte y la inferencia
+    # es CPU, así que subirlo de más los satura en vez de acelerarlos. Medido
+    # sobre la misma tanda de seis documentos, con PaddleOCR replicado:
+    #
+    #     concurrencia 1 → 200,3 s     concurrencia 3 → 111,6 s
+    #     concurrencia 4 → 121,5 s     concurrencia 6 → 167,0 s (una réplica)
+    #
+    # 3 es el punto óptimo, y no por casualidad: son dos réplicas de PaddleOCR
+    # más Tesseract. Para más carga, otra réplica de motor rinde bastante más que
+    # subir este número.
+    WORKER_CONCURRENCY: int = 3
+
+    # Cada cuánto drena la cola un documento pesado, medido: 6 documentos en
+    # 111,6 s con PaddleOCR replicado, o sea uno cada ~19 s. Con esto se le
+    # informa al usuario cuánto le falta en vez de dejarlo mirando un spinner.
+    #
+    # Si se agrega o se quita una réplica de motor hay que volver a medirlo: una
+    # estimación vieja es peor que ninguna, porque el usuario la cree.
+    QUEUE_DRAIN_SECONDS_PER_JOB: float = 19.0
+
+    # Profundidad máxima de la cola antes de rechazar documentos pesados.
+    #
+    # Al ritmo de arriba, 15 en espera ya son siete minutos. Aceptar el número 16
+    # sería mentirle: es mejor un 429 con `Retry-After` y un mensaje honesto que
+    # un `processing` que no termina nunca. Los códigos de barras no cuentan para
+    # este tope porque no pasan por la cola.
+    MAX_QUEUE_DEPTH: int = 15
+
+    # Tope de escaneos por usuario y por minuto, por tipo de documento.
+    #
+    # No cuestan lo mismo: un código de barras se decodifica en 0,2 s sin tocar
+    # un motor y un ticket ocupa un slot del worker entre 40 y 140 s. Un límite
+    # único estrangularía al comercio que escanea una entrega o dejaría que un
+    # solo usuario con tickets sature los motores.
+    #
+    # Es una ventana fija de un minuto, no un token bucket: el usuario puede
+    # gastar todo su cupo de golpe al empezar la ventana, que es justamente lo
+    # que hace falta para una ráfaga legítima. El freno de capacidad real es
+    # `MAX_QUEUE_DEPTH`; esto es contra el abuso y contra un cliente con un bug
+    # de reintentos.
+    RATE_LIMIT_PER_MINUTE_STR: str = "barcode:60,product_label:10,expiry_date:10,receipt:4"
 
     # Umbrales de aceptación (criterios de la propuesta)
     FIELD_CONFIDENCE_THRESHOLD: float = 0.85
@@ -56,9 +115,7 @@ class Settings(BaseSettings):
     # empírica, y la responde `python -m bench.run_benchmark`: sobre las fotos
     # reales del proyecto, PaddleOCR es el único motor que pasa los dos
     # criterios de aceptación por sí solo, y con él de respaldo el híbrido
-    # también los pasa. Con EasyOCR el híbrido acierta más campos clave pero con
-    # confianzas que no llegan a 0,70, así que la mitad de los documentos van a
-    # revisión manual igual.
+    # también los pasa.
     HYBRID_FALLBACK_ENGINE: str = "paddleocr"
 
     # Tope de ORIENTACIONES que se le conceden al motor de respaldo cuando el
@@ -129,8 +186,7 @@ class Settings(BaseSettings):
     # consumidor— y elegir es trabajo del scoring, no de una heurística.
     EXPIRY_CROP_BANDS: int = 3
 
-    # Ancho que se le pide a un motor que prepara su propia entrada (EasyOCR,
-    # PaddleOCR).
+    # Ancho que se le pide a un motor que prepara su propia entrada (PaddleOCR).
     # No es un detalle de implementación del motor: es una decisión de calidad
     # contra costo, y por eso la toma el coordinador. En una etiqueta 800 px
     # alcanzan y sobran; en un sello de vencimiento son la diferencia entre leer
@@ -179,6 +235,18 @@ class Settings(BaseSettings):
     @property
     def ALLOWED_ORIGINS(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS_STR.split(",") if o.strip()]
+
+    @property
+    def rate_limit_per_minute(self) -> dict[str, int]:
+        """Los topes por tipo de documento, ya parseados."""
+        limits: dict[str, int] = {}
+
+        for piece in self.RATE_LIMIT_PER_MINUTE_STR.split(","):
+            name, _, value = piece.partition(":")
+            if name.strip() and value.strip().isdigit():
+                limits[name.strip()] = int(value)
+
+        return limits
 
     @property
     def barcode_downscale_widths(self) -> list[int]:

@@ -3,11 +3,20 @@
 Se ejecuta como proceso aparte (`python -m app.worker`, servicio `worker` del
 docker-compose). Cada job: descarga la imagen → corre el pipeline → guarda el
 resultado → descarta la imagen temporal si corresponde.
+
+Los jobs se procesan de a `WORKER_CONCURRENCY` a la vez. No es para exprimir esta
+máquina —el reconocimiento corre en los servicios de motor, no acá— sino para que
+un escaneo no espere a que terminen los que llegaron antes: en serie, cuatro
+clientes simultáneos hacían que el último terminara a los 168 s teniendo cada uno
+menos de 65 s de trabajo propio.
 """
 
 import asyncio
 import logging
 import signal
+from datetime import datetime, timedelta, timezone
+
+from jose import jwt
 
 from app.core.config import settings
 from app.engines import factory
@@ -18,6 +27,7 @@ logger = logging.getLogger("ocr.worker")
 
 BLPOP_TIMEOUT_SECONDS = 5
 RETRY_DELAY_SECONDS = 5
+PURGE_INTERVAL_SECONDS = 3600
 
 _shutdown = asyncio.Event()
 
@@ -63,11 +73,13 @@ async def process_job(task: dict) -> None:
             await storage_client.discard_temp(image_url, token)
 
 
-async def run() -> None:
-    logger.info(
-        "Worker OCR iniciado (cola=%s, motor=%s)", settings.QUEUE_KEY, settings.OCR_ENGINE
-    )
+async def _consume(numero: int) -> None:
+    """Toma jobs de la cola y los procesa hasta que se pide el apagado.
 
+    Cada consumidor hace su propio `BLPOP`: Redis entrega cada elemento a un solo
+    cliente bloqueado, así que dos consumidores nunca reciben el mismo job y no
+    hace falta coordinarlos.
+    """
     while not _shutdown.is_set():
         try:
             task = await queue.dequeue(timeout=BLPOP_TIMEOUT_SECONDS)
@@ -77,7 +89,72 @@ async def run() -> None:
             continue
 
         if task is not None:
+            logger.debug("Consumidor %d tomó el job %s", numero, task["job_id"])
             await process_job(task)
+
+
+async def _purge_loop() -> None:
+    """Limpia cada hora las imágenes temporales que quedaron sin descartar.
+
+    `process_job` descarta la suya en un `finally`, así que el caso normal ya
+    está cubierto. Lo que no cubre es que el proceso muera en medio de un job —un
+    OOM, un redeploy—: ahí la foto queda en Cloudinary hasta que alguien la
+    limpie. Vive en el worker porque es quien tiene el ciclo de vida de esas
+    imágenes, y porque ya es un proceso de larga duración.
+    """
+    while not _shutdown.is_set():
+        try:
+            await asyncio.wait_for(_shutdown.wait(), timeout=PURGE_INTERVAL_SECONDS)
+            return  # Se pidió el apagado durante la espera.
+        except asyncio.TimeoutError:
+            pass
+
+        try:
+            purged = await storage_client.purge_temp(_service_token())
+            if purged:
+                logger.info("Purgadas %d imágenes temporales vencidas", purged)
+        except storage_client.StorageError as exc:
+            logger.warning("No se pudo purgar las imágenes temporales: %s", exc)
+
+
+def _service_token() -> str:
+    """Token propio del worker para hablar con el storage.
+
+    Los tokens de los usuarios viven en el payload de cada job y se borran al
+    terminarlo, así que para una tarea periódica no hay ninguno a mano: se firma
+    uno de vida corta con el secreto compartido de la plataforma.
+    """
+    return jwt.encode(
+        {
+            "sub": "ocr-worker",
+            "email": "ocr-worker@smartinventory",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+
+
+async def run() -> None:
+    concurrency = max(1, settings.WORKER_CONCURRENCY)
+
+    logger.info(
+        "Worker OCR iniciado (cola=%s, motor=%s, concurrencia=%d)",
+        settings.QUEUE_KEY,
+        settings.OCR_ENGINE,
+        concurrency,
+    )
+
+    # `return_exceptions` para que un consumidor que muera por algo que
+    # `process_job` no atrapó no cancele a los demás ni tumbe el proceso: la cola
+    # sigue atendida con uno menos y el error queda registrado.
+    results = await asyncio.gather(
+        *(_consume(i) for i in range(concurrency)), _purge_loop(), return_exceptions=True
+    )
+
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.error("Una tarea del worker terminó con error: %s", result)
 
     await queue.close()
     # Cierra las conexiones abiertas hacia los servicios de motor.

@@ -103,7 +103,7 @@ class OCRJobRequest(BaseModel):
     engine: str | None = Field(
         default=None,
         description=(
-            "Motor a usar: `tesseract`, `easyocr`, `paddleocr` o `hybrid`. "
+            "Motor a usar: `tesseract`, `paddleocr` o `hybrid`. "
             "Si se omite, se usa el configurado en `OCR_ENGINE`."
         ),
     )
@@ -130,6 +130,23 @@ class OCRJobState(BaseModel):
     created_at: str
     updated_at: str
 
+    queue_position: int | None = Field(
+        default=None,
+        description=(
+            "Lugar en la fila, empezando en 1. Sólo mientras el job está en "
+            "`queued`: en cuanto un consumidor lo toma, deja de estar en la cola."
+        ),
+    )
+    estimated_wait_seconds: int | None = Field(
+        default=None,
+        description=(
+            "Cuánto falta, estimado a partir de lo que tarda la cola en drenar un "
+            "documento. Existe para que la App pueda decir «3º de 7, ~2 min» en "
+            "vez de mostrar un spinner sin información: a dos documentos pesados "
+            "por minuto, una fila de diez son cuatro minutos y medio."
+        ),
+    )
+
 
 class OCRSyncResponse(BaseModel):
     doc_type: DocType
@@ -145,3 +162,13 @@ class EngineStatus(BaseModel):
     version: str = "desconocida"
     languages: list[str] = Field(default_factory=list)
     supports_preprocessing: bool = False
+
+    replicas: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Todas las instancias del motor. Un motor puede estar replicado —"
+            "PaddleOCR lo está, porque es el respaldo del híbrido y satura sus "
+            "núcleos antes que nadie— y quien mira el panel tiene que poder ver "
+            "cuántas hay, no sólo la primera."
+        ),
+    )

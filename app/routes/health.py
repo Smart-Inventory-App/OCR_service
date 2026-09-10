@@ -22,8 +22,8 @@ async def livez():
 async def readyz():
     """Readiness: Redis accesible y el motor configurado puede reconocer.
 
-    Se comprueba el motor **configurado**, no todos: que EasyOCR esté apagado no
-    debería marcar el servicio como caído si el que se usa es Tesseract.
+    Se comprueba el motor **configurado**, no todos: que un motor que no se usa
+    esté apagado no debería marcar el servicio como caído.
 
     El decodificador de códigos de barras se informa pero **no tumba el
     readiness**: es una dependencia de un solo tipo de documento, y que falte
@@ -67,9 +67,10 @@ async def engines():
 def _status(name: str) -> EngineStatus:
     engine = build_engine(name)
     url = engine.base_url if isinstance(engine, RemoteEngine) else ""
+    replicas = list(engine.replicas) if isinstance(engine, RemoteEngine) else []
 
     if not engine.is_available():
-        return EngineStatus(name=name, url=url, available=False)
+        return EngineStatus(name=name, url=url, available=False, replicas=replicas)
 
     info = engine.info() if isinstance(engine, RemoteEngine) else {}
 
@@ -77,6 +78,7 @@ def _status(name: str) -> EngineStatus:
         name=name,
         url=url,
         available=True,
+        replicas=replicas,
         version=info.get("version", "desconocida"),
         languages=info.get("languages", []),
         supports_preprocessing=bool(info.get("supports_preprocessing", False)),
