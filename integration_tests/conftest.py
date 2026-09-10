@@ -30,8 +30,9 @@ import pytest
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("OCR_ENGINE", "hybrid")
 os.environ.setdefault("TESSERACT_SERVICE_URL", "http://localhost:8005")
-os.environ.setdefault("EASYOCR_SERVICE_URL", "http://localhost:8006")
-os.environ.setdefault("PADDLEOCR_SERVICE_URL", "http://localhost:8007")
+os.environ.setdefault(
+    "PADDLEOCR_SERVICE_URL", "http://localhost:8007,http://localhost:8017"
+)
 
 from app.engines.factory import CONCRETE_ENGINES, build_engine  # noqa: E402
 

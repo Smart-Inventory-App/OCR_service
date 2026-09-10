@@ -20,7 +20,7 @@ repositorio. `bench/dataset/` es el conjunto de trabajo: está vacío en el
 repositorio y es donde se colocan las imágenes propias (ver el README).
 
 Requiere que estén levantados los servicios de los motores que se evalúen
-(`ocr_service_tesseract`, `ocr_service_easyocr` y `ocr_service_paddleocr`); el
+(`ocr_service_tesseract` y `ocr_service_paddleocr`); el
 que no responda se reporta como no disponible y se omite, sin tumbar la corrida.
 El consumo de memoria ya no se mide desde acá: cada motor
 es un contenedor aparte y su memoria se lee con `docker stats`, que es la medida

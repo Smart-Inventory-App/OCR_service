@@ -83,7 +83,7 @@ def test_label_plan_never_uses_the_adaptive_threshold():
 
 
 def test_a_self_preparing_engine_gets_one_attempt_per_orientation():
-    """A EasyOCR no se le varían filtros que ignora, pero sí se le busca el giro."""
+    """A PaddleOCR no se le varían filtros que ignora, pero sí se le busca el giro."""
     plan = ocr_service.attempt_plan(DocType.EXPIRY_DATE, supports_preprocessing=False)
 
     # Los recortes de banda van primero y también le corresponden: el recorte es

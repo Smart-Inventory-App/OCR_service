@@ -3,6 +3,7 @@
 El transporte de `httpx` se mockea: no se hacen llamadas de red reales.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -149,6 +150,31 @@ async def test_discard_temp_is_best_effort_on_failure():
         assert await storage_client.discard_temp(IMAGE_URL, "tok") is False
 
 
+async def test_purge_temp_returns_how_many_were_deleted():
+    """Red de seguridad para las temporales que quedaron de un worker caído."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"purged": 3})
+
+    with _patched_client(handler):
+        assert await storage_client.purge_temp("tok123") == 3
+
+    assert seen["url"] == f"{settings.STORAGE_SERVICE_URL}/storage/temp/purge"
+    assert seen["auth"] == "Bearer tok123"
+
+
+async def test_purge_temp_reports_a_storage_that_fails():
+    def boom(_request):
+        raise httpx.ConnectError("connection refused")
+
+    with _patched_client(boom):
+        with pytest.raises(storage_client.StorageError):
+            await storage_client.purge_temp("tok")
+
+
 # ---------------------------------------------------------------------------
 # Loop del worker
 # ---------------------------------------------------------------------------
@@ -172,6 +198,68 @@ async def test_worker_loop_processes_queued_jobs_then_stops(fake_redis):
 
     assert len(processed) == 1
     assert processed[0]["image_url"] == IMAGE_URL
+
+
+async def test_the_worker_processes_several_jobs_at_once(fake_redis, monkeypatch):
+    """Sin esto la cola es estrictamente serie y el último de la fila lo paga.
+
+    Medido con cuatro clientes escaneando a la vez contra un worker en serie: el
+    primero terminó a los 20 s y el cuarto a los 168 s, aunque ninguno tenía más
+    de 65 s de trabajo propio. Peor todavía, el orden es de llegada, así que un
+    código de barras —200 ms, sin tocar un motor— puede quedar detrás de tres
+    tickets.
+    """
+    from app import worker
+    from app.services import queue
+
+    monkeypatch.setattr(worker.settings, "WORKER_CONCURRENCY", 3)
+    monkeypatch.setattr(worker, "BLPOP_TIMEOUT_SECONDS", 1)
+
+    for _ in range(3):
+        await queue.enqueue(IMAGE_URL, DocType.PRODUCT_LABEL, "spa", "tok", False)
+
+    en_vuelo = 0
+    pico = 0
+    terminados = 0
+
+    async def fake_process(task):
+        nonlocal en_vuelo, pico, terminados
+        en_vuelo += 1
+        pico = max(pico, en_vuelo)
+        # Cede el control: si el worker fuera serie, ningún otro job entraría acá.
+        await asyncio.sleep(0.05)
+        en_vuelo -= 1
+        terminados += 1
+        if terminados == 3:
+            worker._shutdown.set()
+
+    worker._shutdown.clear()
+    with patch.object(worker, "process_job", fake_process),          patch.object(worker.queue, "close", AsyncMock()):
+        await worker.run()
+
+    assert terminados == 3
+    assert pico == 3, f"los jobs se procesaron de a {pico}, no en paralelo"
+
+
+async def test_worker_concurrency_of_one_is_still_valid(fake_redis, monkeypatch):
+    """Bajarlo a 1 tiene que seguir funcionando: es la perilla para entornos apretados."""
+    from app import worker
+    from app.services import queue
+
+    monkeypatch.setattr(worker.settings, "WORKER_CONCURRENCY", 1)
+    await queue.enqueue(IMAGE_URL, DocType.PRODUCT_LABEL, "spa", "tok", False)
+
+    processed: list[dict] = []
+
+    async def fake_process(task):
+        processed.append(task)
+        worker._shutdown.set()
+
+    worker._shutdown.clear()
+    with patch.object(worker, "process_job", fake_process),          patch.object(worker.queue, "close", AsyncMock()):
+        await worker.run()
+
+    assert len(processed) == 1
 
 
 async def test_worker_loop_retries_when_redis_is_down(no_redis, monkeypatch):

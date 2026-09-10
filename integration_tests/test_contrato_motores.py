@@ -30,7 +30,7 @@ FOTO = Path(__file__).parent.parent / "tests" / "fixtures" / "imagenes" / "codig
 # si `attempt_plan` prueba variantes de filtros (Tesseract depende de ellas) o
 # sólo giros y recortes (los de aprendizaje profundo binarizan por su cuenta y
 # variarles el contraste no cambia nada).
-PREPARA_SU_ENTRADA = {"tesseract": True, "easyocr": False, "paddleocr": False}
+PREPARA_SU_ENTRADA = {"tesseract": True, "paddleocr": False}
 
 
 @pytest.fixture(scope="module")
