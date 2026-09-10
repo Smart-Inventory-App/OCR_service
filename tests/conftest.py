@@ -157,6 +157,69 @@ def render_image(lines: list[tuple[str, int]], size: tuple[int, int] = (900, 500
     return buffer.getvalue()
 
 
+def render_barcode(code: str, kind: str = "ean13") -> Image.Image:
+    """Genera un código de barras **real**, con su codificación de barras.
+
+    No es un dibujo aproximado: lo produce `python-barcode` con la misma
+    codificación que usa una impresora de etiquetas, así que lo que se ejercita
+    en los tests es la decodificación de verdad y no un doble del decodificador.
+    """
+    import barcode as barcode_lib
+    from barcode.writer import ImageWriter
+
+    buffer = io.BytesIO()
+    barcode_lib.get_barcode_class(kind)(code, writer=ImageWriter()).write(buffer)
+
+    return Image.open(io.BytesIO(buffer.getvalue())).convert("RGB")
+
+
+def barcode_photo(
+    codes: str | list[str],
+    kind: str = "ean13",
+    width: int = 420,
+    canvas: tuple[int, int] = (1200, 1600),
+    blur: float = 0.0,
+) -> bytes:
+    """Compone códigos sobre un fondo tipo foto y devuelve el PNG.
+
+    `width` es el ancho **del código** en píxeles dentro del cuadro, que es la
+    variable de la que depende que se pueda decodificar: es lo que permite
+    reproducir en un test los umbrales que se midieron.
+
+    Se guarda en PNG y no en JPEG a propósito: el ruido de compresión movería el
+    umbral de un entorno a otro y volvería frágiles justamente los tests que
+    fijan dónde está ese umbral.
+    """
+    from PIL import ImageFilter
+
+    if isinstance(codes, str):
+        codes = [codes]
+
+    photo = Image.new("RGB", canvas, (203, 200, 196))
+    top = canvas[1] // 6
+
+    for code in codes:
+        rendered = render_barcode(code, kind)
+        height = int(rendered.height * width / rendered.width)
+        rendered = rendered.resize((width, height), Image.LANCZOS)
+
+        if blur:
+            rendered = rendered.filter(ImageFilter.GaussianBlur(blur))
+
+        photo.paste(rendered, ((canvas[0] - width) // 2, top))
+        top += height + canvas[1] // 8
+
+    buffer = io.BytesIO()
+    photo.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def barcode_image() -> bytes:
+    """Foto de un EAN-13 argentino, legible en el primer intento."""
+    return barcode_photo("779123456789")
+
+
 @pytest.fixture
 def label_image() -> bytes:
     return render_image([("LA SERENISIMA", 40), ("LECHE ENTERA", 30), ("1 litro", 20)])

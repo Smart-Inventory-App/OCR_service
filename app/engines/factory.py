@@ -1,10 +1,14 @@
 """Selección del motor OCR.
 
-`OCR_ENGINE` en `.env` define el motor por defecto: `tesseract`, `easyocr`,
-`paddleocr` o `hybrid`. Los tres primeros son los que nombra la propuesta y cada
-uno es un servicio aparte al que se llega por HTTP; el híbrido no lo es: es una
-**estrategia de este servicio** que combina un motor principal con uno de
-respaldo, y por eso vive acá y no en ningún repositorio de motor.
+`OCR_ENGINE` en `.env` define el motor por defecto: `tesseract`, `paddleocr` o
+`hybrid`. Los dos primeros son servicios aparte a los que se llega por HTTP; el
+híbrido no lo es: es una **estrategia de este servicio** que combina un motor
+principal con uno de respaldo, y por eso vive acá y no en ningún repositorio de
+motor.
+
+PaddleOCR está replicado y su URL admite varias separadas por coma: el
+`RemoteEngine` las reparte por turno. Para el resto del servicio sigue siendo un
+solo motor.
 """
 
 import logging
@@ -17,11 +21,10 @@ from app.pipeline.transform import Transform
 logger = logging.getLogger(__name__)
 
 TESSERACT = "tesseract"
-EASYOCR = "easyocr"
 PADDLEOCR = "paddleocr"
 HYBRID = "hybrid"
 
-CONCRETE_ENGINES = (TESSERACT, EASYOCR, PADDLEOCR)
+CONCRETE_ENGINES = (TESSERACT, PADDLEOCR)
 VALID_ENGINES = (*CONCRETE_ENGINES, HYBRID)
 
 _cache: dict[str, OCREngine] = {}
@@ -110,9 +113,6 @@ def _build(key: str) -> OCREngine:
 
     if key == TESSERACT:
         return RemoteEngine(TESSERACT, settings.TESSERACT_SERVICE_URL, supports_preprocessing=True)
-
-    if key == EASYOCR:
-        return RemoteEngine(EASYOCR, settings.EASYOCR_SERVICE_URL, supports_preprocessing=False)
 
     if key == PADDLEOCR:
         return RemoteEngine(

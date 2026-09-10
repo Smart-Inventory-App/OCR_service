@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.core.config import settings
 from app.main import app
 from app.schemas.ocr import DocType, JobStatus
-from tests.conftest import render_image
+from tests.conftest import barcode_photo, render_image
 
 # Una etiqueta leída bien: marca en grande, nombre debajo, contenido chico.
 LABEL_LINES = ["La Serenisima", "LECHE ENTERA", "1 litro"]
@@ -47,7 +48,9 @@ async def test_readyz_ok_when_dependencies_are_up(fake_redis):
             r = await c.get("/ocr/readyz")
 
     assert r.status_code == 200
-    assert r.json()["checks"] == {"redis": True, "engine": True}
+    # `barcode` viaja en el mismo diccionario pero es informativo: no decide el
+    # readiness. Ver `test_barcode_decoder_does_not_break_readiness`.
+    assert r.json()["checks"] == {"redis": True, "engine": True, "barcode": True}
 
 
 async def test_readyz_fails_without_redis(no_redis):
@@ -174,6 +177,135 @@ async def test_full_async_flow(client, fake_redis, fake_engine):
     assert body["result"]["fields"]["nombre_producto"]["value"] == "LECHE ENTERA"
     assert body["result"]["fields"]["marca"]["value"] == "La Serenisima"
     assert body["result"]["needs_review"] is False
+
+
+async def test_the_quota_stops_a_client_that_floods(client, fake_redis, monkeypatch):
+    """Un tope por usuario y por minuto, distinto según lo que cuesta cada tipo.
+
+    Un ticket ocupa un slot del worker entre 40 y 140 s y un código de barras se
+    resuelve en 0,2 s sin tocar un motor: un límite único estrangularía al
+    comercio que escanea una entrega o dejaría que un solo usuario sature todo.
+    """
+    monkeypatch.setattr(
+        settings, "RATE_LIMIT_PER_MINUTE_STR", "receipt:2,product_label:10"
+    )
+
+    for _ in range(2):
+        aceptado = await client.post(
+            "/ocr/jobs", json={"image_url": IMAGE_URL, "doc_type": "receipt"}
+        )
+        assert aceptado.status_code == 202
+
+    rechazado = await client.post(
+        "/ocr/jobs", json={"image_url": IMAGE_URL, "doc_type": "receipt"}
+    )
+
+    assert rechazado.status_code == 429
+    assert rechazado.headers["retry-after"] == "60"
+
+    # El cupo es por tipo: el de etiquetas sigue intacto.
+    otra = await client.post(
+        "/ocr/jobs", json={"image_url": IMAGE_URL, "doc_type": "product_label"}
+    )
+    assert otra.status_code == 202
+
+
+async def test_a_full_queue_is_refused_instead_of_promising_a_long_wait(
+    client, fake_redis, monkeypatch
+):
+    """Aceptar el número 16 sería mentirle: son siete minutos de espera.
+
+    Mejor un 429 con `Retry-After` que un `processing` que no termina nunca.
+    """
+    monkeypatch.setattr(settings, "MAX_QUEUE_DEPTH", 2)
+
+    for _ in range(2):
+        assert (
+            await client.post("/ocr/jobs", json={"image_url": IMAGE_URL})
+        ).status_code == 202
+
+    lleno = await client.post("/ocr/jobs", json={"image_url": IMAGE_URL})
+
+    assert lleno.status_code == 429
+    assert int(lleno.headers["retry-after"]) > 0
+
+
+async def test_a_barcode_does_not_count_against_the_queue_depth(
+    client, fake_redis, monkeypatch
+):
+    """No pasa por la cola ni por un motor: no tiene por qué esperar a nadie."""
+    monkeypatch.setattr(settings, "MAX_QUEUE_DEPTH", 1)
+
+    assert (await client.post("/ocr/jobs", json={"image_url": IMAGE_URL})).status_code == 202
+
+    codigo = await client.post(
+        "/ocr/jobs", json={"image_url": IMAGE_URL, "doc_type": "barcode"}
+    )
+
+    assert codigo.status_code == 202
+
+
+async def test_a_queued_job_reports_its_place_in_line(client, fake_redis):
+    """La App necesita poder decir «3º de 7, ~2 min» en vez de un spinner."""
+    ids = []
+    for _ in range(3):
+        created = await client.post("/ocr/jobs", json={"image_url": IMAGE_URL})
+        ids.append(created.json()["job_id"])
+
+    tercero = (await client.get(f"/ocr/jobs/{ids[2]}")).json()
+
+    assert tercero["queue_position"] == 3
+    assert tercero["estimated_wait_seconds"] == int(
+        3 * settings.QUEUE_DRAIN_SECONDS_PER_JOB
+    )
+
+
+async def test_a_job_of_another_user_is_not_visible(client, fake_redis):
+    """La lectura de una foto es un dato del usuario, no del portador del token.
+
+    Un `job_id` puede filtrarse por un log, una URL o el historial del cliente;
+    que quien lo tenga pueda leer el ticket de otro sería peor que perderlo. Se
+    responde 404 y no 403 para no confirmar siquiera que existe.
+    """
+    from app.core.security import get_current_user
+    from app.main import app
+
+    created = await client.post("/ocr/jobs", json={"image_url": IMAGE_URL})
+    job_id = created.json()["job_id"]
+
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "otro-usuario"}
+    ajeno = await client.get(f"/ocr/jobs/{job_id}")
+
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "test-user"}
+    propio = await client.get(f"/ocr/jobs/{job_id}")
+
+    assert ajeno.status_code == 404
+    assert propio.status_code == 200
+
+
+async def test_the_scan_also_records_its_owner(client, fake_redis):
+    """`/ocr/scan` es la vía de la App: el dueño se registra igual que en `/jobs`."""
+    from app.core.security import get_current_user
+    from app.main import app
+    from app.services import queue
+
+    with patch(
+        "app.services.storage_client.upload_temp",
+        AsyncMock(return_value="https://cloudinary/tmp/foto.jpg"),
+    ):
+        created = await client.post(
+            "/ocr/scan",
+            files={"file": ("foto.jpg", _image_bytes(), "image/jpeg")},
+            data={"doc_type": "product_label"},
+        )
+    job_id = created.json()["job_id"]
+
+    assert await queue.owner_of(job_id) == "test-user"
+
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "otro-usuario"}
+    assert (await client.get(f"/ocr/jobs/{job_id}")).status_code == 404
+
+    app.dependency_overrides[get_current_user] = lambda: {"sub": "test-user"}
 
 
 async def test_job_state_never_exposes_the_caller_token(client, fake_redis):
@@ -408,11 +540,11 @@ async def test_engine_can_be_chosen_per_request(client, fake_redis, no_retry):
 
     with patch("app.services.ocr_service.process", fake_process):
         r = await client.post(
-            "/ocr/sync/upload", files=_files(), data={"engine": "easyocr"}
+            "/ocr/sync/upload", files=_files(), data={"engine": "paddleocr"}
         )
 
     assert r.status_code == 200
-    assert captured["engine"] == "easyocr"
+    assert captured["engine"] == "paddleocr"
 
 
 async def test_unknown_engine_is_rejected(client, fake_redis):
@@ -438,7 +570,7 @@ async def test_cache_distinguishes_engine(client, fake_redis, fake_engine, no_re
     engine = fake_engine(LABEL_LINES, confidence=0.99, heights=LABEL_HEIGHTS)
 
     await client.post("/ocr/sync/upload", files=_files(), data={"engine": "tesseract"})
-    await client.post("/ocr/sync/upload", files=_files(), data={"engine": "easyocr"})
+    await client.post("/ocr/sync/upload", files=_files(), data={"engine": "paddleocr"})
 
     assert len(engine.calls) == 2
 
@@ -491,3 +623,124 @@ async def test_good_reading_does_not_retry(client, fake_redis, fake_engine):
     await client.post("/ocr/sync/upload", files=_files())
 
     assert len(engine.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Códigos de barras
+# ---------------------------------------------------------------------------
+
+def _barcode_files():
+    return {"file": ("codigo.png", barcode_photo("779123456789"), "image/png")}
+
+
+async def test_barcode_sync_upload(client, fake_redis):
+    """El tipo `barcode` atraviesa la vía sincrónica sin ningún motor arriba: no
+    se usa `fake_engine` porque no hay motor al que reemplazar."""
+    r = await client.post(
+        "/ocr/sync/upload", files=_barcode_files(), data={"doc_type": "barcode"}
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["doc_type"] == "barcode"
+    assert body["result"]["fields"]["codigo"]["value"] == "7791234567898"
+    assert body["result"]["fields"]["pais_registro"]["value"] == "Argentina"
+    assert body["result"]["engine"] == "zbar"
+    assert body["result"]["needs_review"] is False
+
+
+async def test_barcode_async_flow(client, fake_redis):
+    """Flujo completo de la App: encolar, procesar en el worker y leer el job."""
+    from app.services import queue
+    from app.worker import process_job
+
+    with patch("app.services.storage_client.upload_temp", new=AsyncMock(return_value=IMAGE_URL)):
+        r = await client.post(
+            "/ocr/scan", files=_barcode_files(), data={"doc_type": "barcode"}
+        )
+
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    task = await queue.dequeue(timeout=1)
+    with patch(
+        "app.services.image_loader.from_url",
+        new=AsyncMock(return_value=barcode_photo("779123456789")),
+    ), patch("app.services.storage_client.discard_temp", new=AsyncMock(return_value=True)):
+        await process_job(task)
+
+    state = await client.get(f"/ocr/jobs/{job_id}")
+
+    assert state.json()["status"] == JobStatus.DONE
+    assert state.json()["result"]["fields"]["codigo"]["value"] == "7791234567898"
+
+
+async def test_barcode_without_decoder_returns_503(client, fake_redis, monkeypatch):
+    """Falta `libzbar` en la imagen: es una falla local, y un 503 la distingue
+    del 502 con el que se reporta un servicio de motor remoto caído."""
+    from app.decoders import barcode as decoder
+
+    def explota(*_args, **_kwargs):
+        raise decoder.DecoderUnavailable("falta libzbar")
+
+    monkeypatch.setattr(decoder, "_pyzbar", explota)
+
+    r = await client.post(
+        "/ocr/sync/upload", files=_barcode_files(), data={"doc_type": "barcode"}
+    )
+
+    assert r.status_code == 503
+    assert "libzbar" in r.json()["detail"]
+
+
+async def test_readyz_reports_the_barcode_decoder(client, fake_redis, fake_engine):
+    fake_engine(LABEL_LINES)
+
+    r = await client.get("/ocr/readyz")
+
+    assert r.json()["checks"]["barcode"] is True
+
+
+async def test_barcode_decoder_does_not_break_readiness(client, fake_redis, fake_engine, monkeypatch):
+    """Sin decodificador el servicio sigue resolviendo etiquetas, sellos y
+    tickets: no puede quedar fuera de rotación por una dependencia de un solo
+    tipo de documento."""
+    from app.decoders import barcode as decoder
+
+    monkeypatch.setattr(decoder, "is_available", lambda: False)
+    fake_engine(LABEL_LINES)
+
+    r = await client.get("/ocr/readyz")
+
+    assert r.status_code == 200
+    assert r.json()["checks"]["barcode"] is False
+
+
+async def test_truncated_image_is_rejected_with_400(client, fake_redis):
+    """Una imagen truncada tiene la cabecera bien y los datos incompletos.
+
+    Antes pasaba la validación —que sólo miraba la cabecera— y reventaba más
+    adelante: 500 con `barcode` y 502 con `product_label`. Ninguno de los dos
+    describe lo que pasó, que es que el archivo llegó mal.
+    """
+    entera = barcode_photo("779123456789")
+    truncada = entera[: len(entera) // 4]
+
+    for doc_type in ("barcode", "product_label", "receipt"):
+        r = await client.post(
+            "/ocr/sync/upload",
+            files={"file": ("rota.png", truncada, "image/png")},
+            data={"doc_type": doc_type},
+        )
+
+        assert r.status_code == 400, doc_type
+        assert "no es una imagen válida" in r.json()["detail"]
+
+
+async def test_a_whole_image_is_still_accepted(client, fake_redis):
+    """La contraparte: verificar el archivo entero no rechaza uno bueno."""
+    r = await client.post(
+        "/ocr/sync/upload", files=_barcode_files(), data={"doc_type": "barcode"}
+    )
+
+    assert r.status_code == 200

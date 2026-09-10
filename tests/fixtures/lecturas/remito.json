@@ -1,0 +1,170 @@
+{
+ "imagen": "Documentos Generados/remito_02.jpg",
+ "doc_type": "receipt",
+ "motor": "paddleocr",
+ "text": "DEPOSITO CENTRAL SA\nCAMINO DE CINTURA 3400\nCUIT: 30-69334455-1\nREMITO X\nPunto de Venta: 0001 Comp. Nro: 00001002\nFecha: 29/08/2026\nDOCUMENTO NO VALIDO COMO FACTURA\nCant. Descripcion\n6 x DIA LOMITOS DE ATUN\n1 x OFF! FAMILY AEROSOL REPELENTE\n6 x ANALGESICO Y ANTIINFLAMATORIO\n1 x DIA ACEITE DE GIRASOL\n1 x LACTAL DESDE 1913 PAN\n2 x HILERET LIGHT 50% MENOS\nTOTAL DE 8ULT05: 17\nRecibi conforme:",
+ "words": [
+  {
+   "text": "DEPOSITO CENTRAL SA",
+   "confidence": 0.9999145865440369,
+   "left": 165,
+   "top": 131,
+   "width": 224,
+   "height": 34,
+   "line_num": 0
+  },
+  {
+   "text": "CAMINO DE CINTURA 3400",
+   "confidence": 0.9998661279678345,
+   "left": 164,
+   "top": 161,
+   "width": 257,
+   "height": 34,
+   "line_num": 1
+  },
+  {
+   "text": "CUIT: 30-69334455-1",
+   "confidence": 0.9932669401168823,
+   "left": 162,
+   "top": 192,
+   "width": 223,
+   "height": 32,
+   "line_num": 2
+  },
+  {
+   "text": "REMITO X",
+   "confidence": 0.9872192144393921,
+   "left": 318,
+   "top": 259,
+   "width": 183,
+   "height": 34,
+   "line_num": 3
+  },
+  {
+   "text": "Punto de Venta: 0001",
+   "confidence": 0.9984769821166992,
+   "left": 158,
+   "top": 280,
+   "width": 235,
+   "height": 36,
+   "line_num": 4
+  },
+  {
+   "text": "Comp. Nro: 00001002",
+   "confidence": 0.9972997903823853,
+   "left": 422,
+   "top": 296,
+   "width": 222,
+   "height": 34,
+   "line_num": 4
+  },
+  {
+   "text": "Fecha: 29/08/2026",
+   "confidence": 0.9970356225967407,
+   "left": 155,
+   "top": 311,
+   "width": 201,
+   "height": 33,
+   "line_num": 5
+  },
+  {
+   "text": "DOCUMENTO NO VALIDO COMO FACTURA",
+   "confidence": 0.9998717308044434,
+   "left": 154,
+   "top": 340,
+   "width": 373,
+   "height": 43,
+   "line_num": 6
+  },
+  {
+   "text": "Cant.",
+   "confidence": 0.9999397993087769,
+   "left": 150,
+   "top": 400,
+   "width": 77,
+   "height": 28,
+   "line_num": 7
+  },
+  {
+   "text": "Descripcion",
+   "confidence": 0.999997079372406,
+   "left": 216,
+   "top": 403,
+   "width": 146,
+   "height": 31,
+   "line_num": 7
+  },
+  {
+   "text": "6 x DIA LOMITOS DE ATUN",
+   "confidence": 0.9757819175720215,
+   "left": 146,
+   "top": 461,
+   "width": 271,
+   "height": 36,
+   "line_num": 8
+  },
+  {
+   "text": "1 x OFF! FAMILY AEROSOL REPELENTE",
+   "confidence": 0.9871333837509155,
+   "left": 144,
+   "top": 492,
+   "width": 386,
+   "height": 42,
+   "line_num": 9
+  },
+  {
+   "text": "6 x ANALGESICO Y ANTIINFLAMATORIO",
+   "confidence": 0.9888641834259033,
+   "left": 143,
+   "top": 520,
+   "width": 386,
+   "height": 43,
+   "line_num": 10
+  },
+  {
+   "text": "1 x DIA ACEITE DE GIRASOL",
+   "confidence": 0.9681352376937866,
+   "left": 142,
+   "top": 551,
+   "width": 291,
+   "height": 38,
+   "line_num": 11
+  },
+  {
+   "text": "1 x LACTAL DESDE 1913 PAN",
+   "confidence": 0.9765734672546387,
+   "left": 139,
+   "top": 581,
+   "width": 294,
+   "height": 37,
+   "line_num": 12
+  },
+  {
+   "text": "2 x HILERET LIGHT 50% MENOS",
+   "confidence": 0.9863835573196411,
+   "left": 138,
+   "top": 611,
+   "width": 315,
+   "height": 39,
+   "line_num": 13
+  },
+  {
+   "text": "TOTAL DE BULTOS: 17",
+   "confidence": 0.9692326784133911,
+   "left": 135,
+   "top": 671,
+   "width": 223,
+   "height": 33,
+   "line_num": 14
+  },
+  {
+   "text": "Recibi conforme:",
+   "confidence": 0.999971866607666,
+   "left": 133,
+   "top": 731,
+   "width": 189,
+   "height": 32,
+   "line_num": 15
+  }
+ ]
+}

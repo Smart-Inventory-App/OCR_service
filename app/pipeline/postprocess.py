@@ -62,3 +62,35 @@ def clean(text: str) -> str:
     return normalize_whitespace(
         drop_noise_lines(fix_stamp_tokens(fix_numeric_confusions(text)))
     )
+
+
+# Fragmentos que el motor devuelve cuando mira una zona sin texto: letras
+# sueltas, símbolos, restos de un logo. No aportan nada a quien revisa.
+_GARBAGE_LINE = re.compile(r"^(?:[^\w\s]|\w(?=\s|$)){1,4}$")
+
+
+def readable(text: str, doc_type: str | None = None) -> str:
+    """El texto reconocido en una forma que una persona pueda contrastar.
+
+    `raw_text` conserva la salida cruda con sus saltos de línea, que sirve para
+    depurar la estrategia pero es incómoda de leer: el motor parte los renglones
+    donde se le da la gana y mete líneas de basura entre medio. Esto devuelve lo
+    mismo sin el ruido y en la forma que corresponde a cada documento.
+
+    En una etiqueta el orden de los renglones no significa nada, así que se
+    juntan en un solo párrafo —igual que como está escrito el ground truth—. En
+    un comprobante cada renglón **es** un dato, así que se conservan.
+    """
+    lineas = [
+        " ".join(linea.split())
+        for linea in text.splitlines()
+        if linea.strip() and not _GARBAGE_LINE.match(linea.strip())
+    ]
+
+    if not lineas:
+        return ""
+
+    if doc_type == "receipt":
+        return "\n".join(lineas)
+
+    return " ".join(lineas)

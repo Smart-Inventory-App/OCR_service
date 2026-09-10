@@ -1,9 +1,9 @@
 """Interfaz común de los motores OCR.
 
-La propuesta exige una evaluación comparativa entre Tesseract, PaddleOCR y
-EasyOCR, y "no descarta" un enfoque híbrido. Todo el resto del servicio depende
-únicamente de esta interfaz, de modo que agregar o cambiar un motor no toca los
-parsers, el scoring ni las rutas.
+La propuesta exige una evaluación comparativa entre motores y "no descarta" un
+enfoque híbrido. Todo el resto del servicio depende únicamente de esta interfaz,
+de modo que agregar o cambiar un motor no toca los parsers, el scoring ni las
+rutas.
 
 Desde la separación en tres repositorios, los motores ya no corren acá: cada uno
 es un servicio con su propia imagen y esta interfaz es el contrato que hablan.
@@ -93,7 +93,7 @@ class OCREngine(Protocol):
     supports_preprocessing: bool
     """Si al motor le sirve que el coordinador varíe la cadena de filtros.
 
-    Tesseract: sí, su precisión depende fuertemente de ellos. EasyOCR: no,
+    Tesseract: sí, su precisión depende fuertemente de ellos. PaddleOCR: no,
     prepara su propia entrada y cada corrida cuesta segundos. El coordinador lo
     consulta para no gastar reintentos que no van a cambiar nada.
     """

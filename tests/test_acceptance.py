@@ -23,7 +23,7 @@ import pytest
 from app.core.config import settings
 from app.schemas.ocr import DocType
 from app.services import ocr_service
-from tests.conftest import make_output
+from tests.conftest import barcode_photo, make_output
 
 TODAY = date(2026, 7, 29)
 
@@ -249,3 +249,84 @@ def test_unreadable_stamp_is_flagged_for_review():
 
     assert result.needs_review is True
     assert result.fields["fecha_vencimiento"].value is None
+
+
+# ---------------------------------------------------------------------------
+# Códigos de barras — el mismo gate, medido aparte
+# ---------------------------------------------------------------------------
+#
+# Se mide en su propio bloque y **no** se promedia con los casos de OCR, por la
+# misma razón por la que el benchmark separa los campos clave de los accesorios:
+# mezclar dos números esconde el que hay que mirar. Un código de barras trae
+# dígito verificador y acierta el 100 % cuando decodifica, así que sumarlo al
+# promedio de OCR subiría esa cifra sin que ningún motor haya mejorado, y una
+# regresión en las etiquetas quedaría tapada.
+#
+# Estos casos son además la parte más exigente de la suite: son los únicos que
+# **no usan un doble del reconocedor**. La imagen se genera con la codificación
+# real y la decodifica ZBar de verdad.
+
+BARCODE_CASES = [
+    # (descripción, cuerpo del código, tipo, ancho en la foto, código esperado)
+    ("EAN-13 argentino", "779123456789", "ean13", 420, "7791234567898"),
+    ("EAN-13 argentino chico", "779555000123", "ean13", 180, "7795550001234"),
+    ("EAN-13 importado de Brasil", "789123456789", "ean13", 420, "7891234567895"),
+    ("EAN-13 importado de Chile", "780123456789", "ean13", 420, "7801234567894"),
+    ("UPC-A de un encargo", "01234567890", "upca", 420, "0012345678905"),
+    ("EAN-8 de envase chico", "7791234", "ean8", 300, "77912343"),
+    ("ITF-14 de caja mayorista", "17791234567895", "itf", 520, "7791234567898"),
+]
+
+
+def _barcode_result(case):
+    _, body, kind, width, _ = case
+    return ocr_service.process_sync(
+        barcode_photo(body, kind=kind, width=width), DocType.BARCODE, today=TODAY
+    )
+
+
+def test_barcode_key_field_accuracy_meets_85_percent():
+    """Criterio 1 sobre el campo clave del tipo `barcode`: `codigo`."""
+    correct = sum(
+        _barcode_result(case).fields["codigo"].value == case[4] for case in BARCODE_CASES
+    )
+    total = len(BARCODE_CASES)
+    accuracy = correct / total
+
+    assert accuracy >= 0.85, f"Precisión de `codigo` {accuracy:.1%} < 85% ({correct}/{total})"
+
+
+@pytest.mark.parametrize("case", BARCODE_CASES, ids=lambda c: c[0][:26])
+def test_barcode_document_confidence_meets_threshold(case):
+    """Criterio 2: confianza global por documento ≥ 70%."""
+    assert _barcode_result(case).document_confidence >= settings.DOCUMENT_CONFIDENCE_THRESHOLD
+
+
+@pytest.mark.parametrize("case", BARCODE_CASES, ids=lambda c: c[0][:26])
+def test_readable_barcodes_do_not_require_manual_review(case):
+    """Un código legible carga el producto sin que el usuario confirme nada."""
+    assert _barcode_result(case).needs_review is False
+
+
+def test_unreadable_barcode_is_flagged_for_review():
+    """Contraparte: por debajo del umbral de resolución no se inventa un número.
+    Un código inventado es peor que ninguno, porque el dígito verificador le da
+    al usuario una apariencia de certeza que no tiene cómo auditar."""
+    result = ocr_service.process_sync(
+        barcode_photo("779123456789", width=120), DocType.BARCODE, today=TODAY
+    )
+
+    assert result.fields["codigo"].value is None
+    assert result.needs_review is True
+    assert result.document_confidence < settings.DOCUMENT_CONFIDENCE_THRESHOLD
+
+
+def test_store_internal_barcode_is_flagged_for_review():
+    """El código de la balanza del súper decodifica perfecto y aun así va a
+    revisión: no identifica un producto fuera de ese comercio."""
+    result = ocr_service.process_sync(
+        barcode_photo("200123450000"), DocType.BARCODE, today=TODAY
+    )
+
+    assert result.fields["codigo"].value == "2001234500005"
+    assert result.needs_review is True

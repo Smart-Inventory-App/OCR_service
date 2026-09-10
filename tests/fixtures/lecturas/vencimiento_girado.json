@@ -1,0 +1,107 @@
+{
+ "imagen": "Almacén Casa 2/4V.jpeg",
+ "doc_type": "expiry_date",
+ "motor": "paddleocr",
+ "text": "Consumir preferentemente antes del:\nLote No: MIXTO\n27FEB27 153 Cartón | Apoyando la\nL: 1048 CI:16:36 silvicultura responsable\nFSC FSC® C014047\nwww.fsc.org",
+ "words": [
+  {
+   "text": "Consumir preferentemente antes del:",
+   "confidence": 0.9893559217453003,
+   "left": 216,
+   "top": 117,
+   "width": 304,
+   "height": 26,
+   "line_num": 0
+  },
+  {
+   "text": "MIXTO",
+   "confidence": 0.9999250173568726,
+   "left": 835,
+   "top": 136,
+   "width": 84,
+   "height": 29,
+   "line_num": 1
+  },
+  {
+   "text": "Lote No:",
+   "confidence": 0.9485169649124146,
+   "left": 215,
+   "top": 140,
+   "width": 68,
+   "height": 23,
+   "line_num": 1
+  },
+  {
+   "text": "27FEB27",
+   "confidence": 0.9997178912162781,
+   "left": 213,
+   "top": 155,
+   "width": 181,
+   "height": 53,
+   "line_num": 2
+  },
+  {
+   "text": "153",
+   "confidence": 0.9996550679206848,
+   "left": 429,
+   "top": 155,
+   "width": 115,
+   "height": 49,
+   "line_num": 2
+  },
+  {
+   "text": "Cartón | Apoyando la",
+   "confidence": 0.9887869954109192,
+   "left": 790,
+   "top": 164,
+   "width": 180,
+   "height": 31,
+   "line_num": 2
+  },
+  {
+   "text": "silvicultura responsable",
+   "confidence": 0.9938276410102844,
+   "left": 781,
+   "top": 183,
+   "width": 200,
+   "height": 29,
+   "line_num": 3
+  },
+  {
+   "text": "L: 1048 CI:16:36",
+   "confidence": 0.8930501341819763,
+   "left": 212,
+   "top": 197,
+   "width": 418,
+   "height": 58,
+   "line_num": 3
+  },
+  {
+   "text": "FSC",
+   "confidence": 0.9999899864196777,
+   "left": 698,
+   "top": 201,
+   "width": 73,
+   "height": 27,
+   "line_num": 4
+  },
+  {
+   "text": "FSC® C014047",
+   "confidence": 0.924372673034668,
+   "left": 796,
+   "top": 208,
+   "width": 171,
+   "height": 34,
+   "line_num": 4
+  },
+  {
+   "text": "www.fsc.org",
+   "confidence": 0.999929666519165,
+   "left": 699,
+   "top": 228,
+   "width": 73,
+   "height": 14,
+   "line_num": 5
+  }
+ ]
+}

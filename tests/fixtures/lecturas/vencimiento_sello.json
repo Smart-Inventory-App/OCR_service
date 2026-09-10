@@ -1,0 +1,134 @@
+{
+ "imagen": "Almacén/10V.jpg",
+ "doc_type": "expiry_date",
+ "motor": "paddleocr",
+ "text": "100 ml de tu infusion\npreferida\nATENCIÓN AL CONSUMIDOR\n0800-222-4453\natencionalcliente@hilere.com.ar\n500m CONT.NETO\nConservar el envase tapado INDUSTRIA ARGEN\nVer lote y vencimiento en en lugar fresco y seco.\nALIMENTO DIETETIO\nel envase.\n1L6217 07:45-VTO08/28",
+ "words": [
+  {
+   "text": "100 ml de tu infusion",
+   "confidence": 0.968288779258728,
+   "left": 1294,
+   "top": 0,
+   "width": 870,
+   "height": 130,
+   "line_num": 0
+  },
+  {
+   "text": "preferida",
+   "confidence": 0.9997029900550842,
+   "left": 1498,
+   "top": 111,
+   "width": 462,
+   "height": 195,
+   "line_num": 1
+  },
+  {
+   "text": "ATENCIÓN AL CONSUMIDOR",
+   "confidence": 0.9822046160697937,
+   "left": 1294,
+   "top": 341,
+   "width": 988,
+   "height": 146,
+   "line_num": 2
+  },
+  {
+   "text": "0800-222-4453",
+   "confidence": 0.9999973773956299,
+   "left": 1310,
+   "top": 443,
+   "width": 985,
+   "height": 188,
+   "line_num": 3
+  },
+  {
+   "text": "atencionalcliente@hilere.com.ar",
+   "confidence": 0.807198703289032,
+   "left": 1338,
+   "top": 589,
+   "width": 953,
+   "height": 131,
+   "line_num": 4
+  },
+  {
+   "text": "500m",
+   "confidence": 0.9920028448104858,
+   "left": 2661,
+   "top": 682,
+   "width": 491,
+   "height": 379,
+   "line_num": 5
+  },
+  {
+   "text": "CONT.NETO",
+   "confidence": 0.9995806217193604,
+   "left": 2706,
+   "top": 688,
+   "width": 315,
+   "height": 204,
+   "line_num": 5
+  },
+  {
+   "text": "Conservar el envase tapado",
+   "confidence": 0.9776894450187683,
+   "left": 1443,
+   "top": 784,
+   "width": 813,
+   "height": 124,
+   "line_num": 6
+  },
+  {
+   "text": "INDUSTRIA ARGEN",
+   "confidence": 0.982200562953949,
+   "left": 2693,
+   "top": 847,
+   "width": 386,
+   "height": 271,
+   "line_num": 6
+  },
+  {
+   "text": "en lugar fresco y seco.",
+   "confidence": 0.990568995475769,
+   "left": 1523,
+   "top": 882,
+   "width": 666,
+   "height": 118,
+   "line_num": 7
+  },
+  {
+   "text": "Ver lote y vencimiento en",
+   "confidence": 0.980564296245575,
+   "left": 1507,
+   "top": 959,
+   "width": 724,
+   "height": 127,
+   "line_num": 7
+  },
+  {
+   "text": "ALIMENTO DIETETIO",
+   "confidence": 0.926427960395813,
+   "left": 2687,
+   "top": 972,
+   "width": 379,
+   "height": 271,
+   "line_num": 8
+  },
+  {
+   "text": "el envase.",
+   "confidence": 0.9444701075553894,
+   "left": 1718,
+   "top": 1061,
+   "width": 306,
+   "height": 102,
+   "line_num": 9
+  },
+  {
+   "text": "1L6217 07:45-VTO08/28",
+   "confidence": 0.9993022680282593,
+   "left": 1523,
+   "top": 1208,
+   "width": 893,
+   "height": 143,
+   "line_num": 10
+  }
+ ]
+}

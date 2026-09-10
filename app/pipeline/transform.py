@@ -24,6 +24,24 @@ class Transform:
     """Cadena de preparación pedida al motor, más el giro de la imagen."""
 
     rotate: int = 0
+    crop_band: int = -1
+    """Recorta a la banda de texto n-ésima antes de todo lo demás. -1 = sin recorte.
+
+    Es la respuesta al sello de vencimiento. En una foto de envase de 4000 px el
+    sello es un renglón de 90 px de alto: ampliado junto con el resto sigue
+    siendo diminuto, y ningún motor lo levanta. Recortado, el motor recibe el
+    renglón y no el envase entero: el sello deja de competir con la etiqueta
+    impresa y con el fondo de la foto. **No se amplía** —el motor sólo achica— y
+    es deliberado: llevar la banda a más ancho con interpolación no agrega
+    información y el reconocimiento empeora.
+
+    Cuál de las bandas es el sello **no lo decide el motor**: medido sobre las
+    fotos reales, el criterio de "la franja más marcada" elige el teléfono de
+    atención al consumidor. El motor las ordena, el coordinador prueba las
+    primeras y el scoring elige la que trajo una fecha. Es el mismo reparto de
+    responsabilidades que con los filtros.
+    """
+
     grayscale: bool = True
     rescale: bool = True
     min_width: int = 1600
@@ -39,6 +57,9 @@ class Transform:
 
     def binarized(self, mode: str) -> "Transform":
         return replace(self, binarize=mode)
+
+    def cropped(self, band: int) -> "Transform":
+        return replace(self, crop_band=band)
 
     def as_payload(self) -> dict:
         return asdict(self)

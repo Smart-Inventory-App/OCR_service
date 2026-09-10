@@ -71,3 +71,23 @@ async def discard_temp(image_url: str, token: str) -> bool:
 
     logger.info("Imagen temporal descartada: %s", image_url)
     return True
+
+
+async def purge_temp(token: str) -> int:
+    """Borra las temporales vencidas que nadie descartó. Devuelve cuántas.
+
+    `discard_temp` corre en el `finally` del worker, así que el caso normal está
+    cubierto. Lo que no cubre es que el proceso muera en medio de un job —un OOM,
+    un redeploy— o que Redis pierda la cola: ahí la imagen queda en Cloudinary
+    hasta que alguien la limpie. Es la red de seguridad que el storage ya expone.
+    """
+    url = f"{settings.STORAGE_SERVICE_URL}{_TEMP_ENDPOINT}/purge"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
+            response = await client.post(url, headers={"Authorization": f"Bearer {token}"})
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise StorageError(f"No se pudo purgar las imágenes temporales: {exc}") from exc
+
+    return int(response.json().get("purged", 0))

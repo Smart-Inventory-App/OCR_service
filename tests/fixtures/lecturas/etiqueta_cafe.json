@@ -1,0 +1,188 @@
+{
+ "imagen": "Almacén Casa 2/1F.jpeg",
+ "doc_type": "product_label",
+ "motor": "paddleocr",
+ "text": "LaVirginia\nCAFÉINSTANTÁNEO\nDISFRUTALO\nBATIDO\nClásico\nEspuma instantánea\nen sobres\nPRESIONE 1 1\nSin TACC SOBRE\nROCILLO\nCART TUAIO TANO COM AILAI LAND LIN OE GHILN PESO ME10 36 subres\n61.2g CONTIENE DE L/g EADA UNAO",
+ "words": [
+  {
+   "text": "LaVirginia",
+   "confidence": 0.9999938011169434,
+   "left": 71,
+   "top": 208,
+   "width": 571,
+   "height": 164,
+   "line_num": 0
+  },
+  {
+   "text": "CAFÉINSTANTÁNEO",
+   "confidence": 0.9997390508651733,
+   "left": 131,
+   "top": 364,
+   "width": 451,
+   "height": 40,
+   "line_num": 1
+  },
+  {
+   "text": "DISFRUTALO",
+   "confidence": 0.9999539256095886,
+   "left": 51,
+   "top": 742,
+   "width": 130,
+   "height": 109,
+   "line_num": 2
+  },
+  {
+   "text": "BATIDO",
+   "confidence": 0.9999012351036072,
+   "left": 96,
+   "top": 774,
+   "width": 106,
+   "height": 96,
+   "line_num": 3
+  },
+  {
+   "text": "Clásico",
+   "confidence": 0.9999293684959412,
+   "left": 200,
+   "top": 829,
+   "width": 303,
+   "height": 86,
+   "line_num": 4
+  },
+  {
+   "text": "Espuma instantánea",
+   "confidence": 0.9999637603759766,
+   "left": 217,
+   "top": 904,
+   "width": 275,
+   "height": 37,
+   "line_num": 5
+  },
+  {
+   "text": "en sobres",
+   "confidence": 0.9999317526817322,
+   "left": 233,
+   "top": 929,
+   "width": 236,
+   "height": 55,
+   "line_num": 6
+  },
+  {
+   "text": "PRESIONE",
+   "confidence": 0.8767949342727661,
+   "left": 326,
+   "top": 990,
+   "width": 47,
+   "height": 18,
+   "line_num": 7
+  },
+  {
+   "text": "1",
+   "confidence": 0.9999532699584961,
+   "left": 545,
+   "top": 996,
+   "width": 33,
+   "height": 34,
+   "line_num": 7
+  },
+  {
+   "text": "1",
+   "confidence": 0.9999881982803345,
+   "left": 470,
+   "top": 998,
+   "width": 26,
+   "height": 31,
+   "line_num": 7
+  },
+  {
+   "text": "Sin TACC",
+   "confidence": 0.9473174214363098,
+   "left": 103,
+   "top": 1012,
+   "width": 82,
+   "height": 35,
+   "line_num": 8
+  },
+  {
+   "text": "SOBRE",
+   "confidence": 0.958945631980896,
+   "left": 461,
+   "top": 1029,
+   "width": 41,
+   "height": 14,
+   "line_num": 8
+  },
+  {
+   "text": "ROCILLO",
+   "confidence": 0.9290733933448792,
+   "left": 532,
+   "top": 1038,
+   "width": 54,
+   "height": 17,
+   "line_num": 9
+  },
+  {
+   "text": "36 subres",
+   "confidence": 0.8728400468826294,
+   "left": 504,
+   "top": 1096,
+   "width": 93,
+   "height": 45,
+   "line_num": 10
+  },
+  {
+   "text": "PESO ME10",
+   "confidence": 0.7609882950782776,
+   "left": 320,
+   "top": 1101,
+   "width": 49,
+   "height": 27,
+   "line_num": 10
+  },
+  {
+   "text": "CART TUAIO TANO COM",
+   "confidence": 0.5698285698890686,
+   "left": 103,
+   "top": 1104,
+   "width": 139,
+   "height": 15,
+   "line_num": 10
+  },
+  {
+   "text": "AILAI LAND LIN OE GHILN",
+   "confidence": 0.6480867862701416,
+   "left": 105,
+   "top": 1116,
+   "width": 141,
+   "height": 13,
+   "line_num": 10
+  },
+  {
+   "text": "61.2g",
+   "confidence": 0.8380546569824219,
+   "left": 316,
+   "top": 1119,
+   "width": 63,
+   "height": 42,
+   "line_num": 11
+  },
+  {
+   "text": "CONTIENE",
+   "confidence": 0.9657814502716064,
+   "left": 467,
+   "top": 1119,
+   "width": 48,
+   "height": 18,
+   "line_num": 11
+  },
+  {
+   "text": "DE L/g EADA UNAO",
+   "confidence": 0.6226072907447815,
+   "left": 511,
+   "top": 1132,
+   "width": 79,
+   "height": 20,
+   "line_num": 11
+  }
+ ]
+}

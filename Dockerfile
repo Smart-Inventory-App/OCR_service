@@ -2,7 +2,15 @@ FROM python:3.11-slim
 
 # Sin Tesseract, sin libGL, sin PyTorch. Al mover los motores a sus propios
 # servicios este contenedor pasó de ~2,5 GB a ~200 MB y arranca en segundos.
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+#
+# `libzbar0` es la única librería de reconocimiento que queda acá, y entra por
+# `doc_type=barcode`: son unos cientos de KB, no las dependencias de sistema que
+# motivaron sacar los motores. Sin ella, `pyzbar` importa pero falla al buscar el
+# .so, y el servicio lo reporta como decodificador no disponible en vez de
+# romper en la primera petición.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        libzbar0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

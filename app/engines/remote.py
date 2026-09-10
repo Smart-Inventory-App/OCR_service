@@ -1,14 +1,19 @@
 """Cliente de un servicio de motor OCR.
 
-Es la pieza que reemplaza a los adaptadores que antes ejecutaban Tesseract y
-EasyOCR dentro de este proceso. Desde afuera se comporta igual —cumple
-`OCREngine`— pero por dentro delega en `ocr_service_tesseract` u
-`ocr_service_easyocr`.
+Es la pieza que reemplaza a los adaptadores que antes ejecutaban los motores
+dentro de este proceso. Desde afuera se comporta igual —cumple `OCREngine`— pero
+por dentro delega en `ocr_service_tesseract` u `ocr_service_paddleocr`, que
+hablan el mismo contrato.
+
+Un motor puede estar replicado: `base_url` admite varias URLs separadas por coma
+y se reparten por turno, con caída a la siguiente si una no responde. Para el
+resto del servicio sigue siendo un solo motor.
 
 Todo lo que decide *qué* pedirle al motor (giro, filtros, segmentación, cuántos
 intentos) sigue estando de este lado. El servicio remoto sólo ejecuta.
 """
 
+import itertools
 import json
 import logging
 
@@ -36,13 +41,32 @@ class RemoteEngine:
 
     def __init__(self, name: str, base_url: str, supports_preprocessing: bool) -> None:
         self.name = name
-        self.base_url = base_url.rstrip("/")
+        # Un motor puede estar replicado: `base_url` admite varias separadas por
+        # coma. Es la forma de ensanchar el cuello de botella cuando el
+        # reconocimiento es CPU y una sola instancia satura sus núcleos.
+        self.replicas = _split_urls(base_url)
         # Valor por defecto hasta que `/engine/info` diga otra cosa: cada motor
         # es la autoridad sobre si le sirve que le varíen los filtros.
         self.supports_preprocessing = supports_preprocessing
         self._info: dict | None = None
         self._info_calls = 0
         self._http: httpx.Client | None = None
+        self._next = itertools.count()
+
+    @property
+    def base_url(self) -> str:
+        """La primera réplica. Es lo que se nombra en logs y mensajes de error."""
+        return self.replicas[0]
+
+    def _pick(self) -> str:
+        """Réplica que atiende esta petición, por turno.
+
+        Turno redondo y no "la menos ocupada": para saber cuál está menos
+        ocupada habría que contabilizar peticiones en vuelo, y con dos réplicas
+        idénticas y peticiones de duración parecida el turno reparte igual de
+        bien sin estado compartido.
+        """
+        return self.replicas[next(self._next) % len(self.replicas)]
 
     # Cliente HTTP
     def _client(self) -> httpx.Client:
@@ -84,37 +108,59 @@ class RemoteEngine:
             "transform": json.dumps(spec.as_payload()),
         }
 
-        try:
-            response = self._client().post(
-                f"{self.base_url}/engine/run",
-                files={"file": ("image.jpg", content, "image/jpeg")},
-                data=payload,
-                headers=self._headers(),
-                timeout=settings.ENGINE_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise EngineUnavailable(
-                f"El motor '{self.name}' respondió {exc.response.status_code}: "
-                f"{_detail(exc.response)}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise EngineUnavailable(
-                f"No se pudo contactar al motor '{self.name}' en {self.base_url}: {exc}"
-            ) from exc
+        # Si la réplica que tocaba no contesta se prueba con las otras: tener dos
+        # instancias sirve tanto para repartir la carga como para sobrevivir a que
+        # una se caiga o se esté reiniciando.
+        ultimo: Exception | None = None
 
-        return _to_output(response.json(), self.name)
+        for _ in range(len(self.replicas)):
+            url = self._pick()
+            try:
+                response = self._client().post(
+                    f"{url}/engine/run",
+                    files={"file": ("image.jpg", content, "image/jpeg")},
+                    data=payload,
+                    headers=self._headers(),
+                    timeout=settings.ENGINE_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                return _to_output(response.json(), self.name)
+            except httpx.HTTPStatusError as exc:
+                # Un error de la aplicación (una imagen inválida, por ejemplo) va
+                # a dar lo mismo en la otra réplica: no se reintenta.
+                raise EngineUnavailable(
+                    f"El motor '{self.name}' respondió {exc.response.status_code}: "
+                    f"{_detail(exc.response)}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                logger.warning("Réplica %s de '%s' no respondió: %s", url, self.name, exc)
+                ultimo = exc
+
+        # El mensaje se adapta: con una sola instancia, hablar de "réplicas" sería
+        # confuso para quien lee el log.
+        donde = (
+            f"en {self.base_url}"
+            if len(self.replicas) == 1
+            else f"en ninguna de sus {len(self.replicas)} réplicas ({', '.join(self.replicas)})"
+        )
+        raise EngineUnavailable(
+            f"No se pudo contactar al motor '{self.name}' {donde}: {ultimo}"
+        ) from ultimo
 
     def is_available(self) -> bool:
+        """Con que responda una réplica alcanza: el motor sigue utilizable."""
+        return any(self._replica_available(url) for url in self.replicas)
+
+    def _replica_available(self, url: str) -> bool:
         try:
             response = self._client().get(
-                f"{self.base_url}/engine/readyz", headers=self._headers()
+                f"{url}/engine/readyz", headers=self._headers()
             )
             # `degraded` (por ejemplo, falta el paquete de idioma) sigue siendo
             # utilizable: el motor cae a inglés y lo avisa.
             return response.status_code == 200 and response.json().get("status") != "error"
         except (httpx.HTTPError, ValueError) as exc:
-            logger.warning("Motor '%s' no disponible: %s", self.name, exc)
+            logger.warning("Réplica %s de '%s' no disponible: %s", url, self.name, exc)
             return False
 
     # ── Metadatos ─────────────────────────────────────────────────────────────
@@ -178,3 +224,13 @@ def _detail(response: httpx.Response) -> str:
         return str(response.json().get("detail", response.text))[:200]
     except ValueError:
         return response.text[:200]
+
+
+def _split_urls(raw: str) -> list[str]:
+    """`"http://a:8007, http://b:8007"` → las dos, sin barra final."""
+    urls = [piece.strip().rstrip("/") for piece in raw.split(",") if piece.strip()]
+
+    if not urls:
+        raise ValueError("Un motor remoto necesita al menos una URL")
+
+    return urls

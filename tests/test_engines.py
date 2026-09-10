@@ -145,6 +145,83 @@ def test_remote_engine_raises_when_the_service_is_down():
 
 
 @respx.mock
+def test_a_replicated_engine_spreads_the_load_between_its_replicas():
+    """Turno redondo: es lo que ensancha el cuello de botella del módulo.
+
+    Medido, PaddleOCR con una sola instancia se clava en ~650 % de CPU y deja el
+    techo del sistema en 2,2 documentos pesados por minuto, mientras el resto del
+    módulo mira.
+    """
+    una = respx.post("http://réplica-a:8007/engine/run").mock(
+        return_value=httpx.Response(200, json={"engine": "paddleocr", "words": []})
+    )
+    otra = respx.post("http://réplica-b:8007/engine/run").mock(
+        return_value=httpx.Response(200, json={"engine": "paddleocr", "words": []})
+    )
+
+    engine = RemoteEngine(
+        "paddleocr", "http://réplica-a:8007,http://réplica-b:8007",
+        supports_preprocessing=False,
+    )
+    for _ in range(4):
+        engine.run(IMAGE)
+
+    assert una.call_count == 2
+    assert otra.call_count == 2
+
+
+@respx.mock
+def test_a_replica_that_is_down_falls_over_to_the_other():
+    """Tener dos sirve para repartir carga y para sobrevivir a que una se caiga."""
+    respx.post("http://caida:8007/engine/run").mock(side_effect=httpx.ConnectError("refused"))
+    viva = respx.post("http://viva:8007/engine/run").mock(
+        return_value=httpx.Response(200, json={"engine": "paddleocr", "words": []})
+    )
+
+    engine = RemoteEngine(
+        "paddleocr", "http://caida:8007,http://viva:8007", supports_preprocessing=False
+    )
+
+    assert engine.run(IMAGE).engine == "paddleocr"
+    assert viva.call_count == 1
+
+
+@respx.mock
+def test_an_application_error_is_not_retried_on_the_other_replica():
+    """Una imagen inválida va a dar lo mismo en la otra: reintentar sería gastar."""
+    primera = respx.post("http://a:8007/engine/run").mock(
+        return_value=httpx.Response(400, json={"detail": "no es una imagen"})
+    )
+    segunda = respx.post("http://b:8007/engine/run").mock(
+        return_value=httpx.Response(200, json={"engine": "paddleocr", "words": []})
+    )
+
+    engine = RemoteEngine(
+        "paddleocr", "http://a:8007,http://b:8007", supports_preprocessing=False
+    )
+
+    with pytest.raises(EngineUnavailable, match="400"):
+        engine.run(IMAGE)
+
+    assert primera.call_count == 1
+    assert segunda.call_count == 0
+
+
+@respx.mock
+def test_a_replicated_engine_is_available_if_any_replica_answers():
+    respx.get("http://caida:8007/engine/readyz").mock(side_effect=httpx.ConnectError("refused"))
+    respx.get("http://viva:8007/engine/readyz").mock(
+        return_value=httpx.Response(200, json={"status": "ok", "engine": "paddleocr"})
+    )
+
+    engine = RemoteEngine(
+        "paddleocr", "http://caida:8007,http://viva:8007", supports_preprocessing=False
+    )
+
+    assert engine.is_available() is True
+
+
+@respx.mock
 def test_remote_engine_is_available_only_when_ready():
     respx.get(f"{TESSERACT_URL}/engine/readyz").mock(
         return_value=httpx.Response(200, json={"status": "ok", "engine": "tesseract"})
@@ -280,21 +357,30 @@ def test_remote_engine_sends_the_shared_key(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_factory_builds_each_concrete_engine_from_its_service_url():
-    assert factory.build_engine("tesseract").base_url == settings.TESSERACT_SERVICE_URL.rstrip("/")
-    assert factory.build_engine("easyocr").base_url == settings.EASYOCR_SERVICE_URL.rstrip("/")
-    assert factory.build_engine("paddleocr").base_url == settings.PADDLEOCR_SERVICE_URL.rstrip("/")
+    tesseract = factory.build_engine("tesseract")
+    paddleocr = factory.build_engine("paddleocr")
+
+    assert tesseract.base_url == settings.TESSERACT_SERVICE_URL.split(",")[0].rstrip("/")
+    assert paddleocr.base_url == settings.PADDLEOCR_SERVICE_URL.split(",")[0].rstrip("/")
 
 
-def test_the_three_engines_of_the_proposal_are_available():
-    """Tesseract, PaddleOCR y EasyOCR son los que la propuesta manda comparar."""
-    assert set(factory.CONCRETE_ENGINES) == {"tesseract", "easyocr", "paddleocr"}
+def test_the_engines_of_the_module_are_available():
+    """Los dos que quedaron en pie después de medirlos."""
+    assert set(factory.CONCRETE_ENGINES) == {"tesseract", "paddleocr"}
+
+
+def test_paddleocr_is_built_with_all_its_replicas():
+    """Va replicado: es el respaldo del híbrido y satura sus núcleos antes que nadie."""
+    replicas = factory.build_engine("paddleocr").replicas
+
+    assert len(replicas) == len(settings.PADDLEOCR_SERVICE_URL.split(","))
+    assert all(url.startswith("http") for url in replicas)
 
 
 def test_factory_declares_who_benefits_from_preprocessing():
     assert factory.build_engine("tesseract").supports_preprocessing is True
-    assert factory.build_engine("easyocr").supports_preprocessing is False
-    # PP-OCR normaliza y reescala dentro de la red y espera color, igual que
-    # EasyOCR: variarle los filtros gasta corridas caras sin cambiar nada.
+    # PP-OCR normaliza y reescala dentro de la red y espera color: variarle los
+    # filtros gasta corridas caras sin cambiar nada.
     assert factory.build_engine("paddleocr").supports_preprocessing is False
 
 

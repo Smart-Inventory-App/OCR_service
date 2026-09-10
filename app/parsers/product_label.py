@@ -50,6 +50,37 @@ CATEGORIES = (
     "perejil", "oregano", "albahaca", "comino", "pimienta", "pimenton",
     "laurel", "romero", "tomillo", "ajo", "curry", "canela", "provenzal",
     "chimichurri", "condimento", "condimentos", "especias", "nuez moscada",
+    # Farmacia y perfumería. Faltaban enteras: las etiquetas de farmacia daban 2
+    # altas automáticas sobre 27 (7 %) contra 59 % en almacén.
+    #
+    # Lo que entra acá es lo que **nombra** el producto, y en una caja argentina
+    # eso es la monodroga (`Ibuprofeno 400 mg`) o el artículo en sí (`gasa`,
+    # `protector solar`). Medido sobre las fotos: el nombre correcto ya estaba
+    # siendo leído, pero caía en `detalles` porque la línea trae la dosis y el
+    # filtro de contenido la reclamaba antes.
+    #
+    # Lo que describe el EFECTO —analgésico, antiinflamatorio— va a DESCRIPTORS y
+    # no acá: si compitiera por el nombre, en `Sertal Compuesto` ganaría
+    # «Antiespasmódico y analgésico», que no es el nombre de nada.
+    # Sólo las monodrogas que el envase imprime en grande como nombre del
+    # producto. Las que aparecen únicamente en la línea de composición —en letra
+    # chica: `Propinox Clonixinato de lisina`, `Hioscina butilbromuro`— quedaron
+    # afuera a propósito: como categoría harían que esa línea le gane al nombre,
+    # porque entre los bloques con categoría se elige el más grande y un renglón
+    # de composición sin competencia gana aunque sea diminuto.
+    "ibuprofeno", "paracetamol", "aspirina", "diclofenac", "naproxeno",
+    "amoxicilina", "azitromicina", "omeprazol", "ranitidina", "loratadina",
+    "cetirizina", "dipirona",
+    "jarabe", "suspension", "supositorios", "pomada", "unguento", "colirio",
+    "alcohol en gel", "agua oxigenada", "iodopovidona", "curitas", "gasa",
+    "venda", "algodon", "barbijo", "termometro", "suero fisiologico",
+    "protector solar", "repelente", "crema dental", "pasta dental", "enjuague",
+    "hilo dental", "desodorante", "talco", "vaselina", "jabon", "jabon liquido",
+    "suplemento", "magnesio", "calcio", "hierro",
+    # `gotas`, `polvo` y `vitaminas` quedaron deliberadamente afuera: aparecen en
+    # el texto de uso del envase («8 gotas = 1 cucharadita») o ya son
+    # descriptores («en polvo», «con vitaminas»), y como categoría harían que una
+    # línea accesoria le gane al nombre real del producto.
 )
 
 # Calificativos: describen al producto pero no lo nombran ni son su marca.
@@ -63,6 +94,16 @@ DESCRIPTORS = (
     "fortificado", "con vitaminas", "masa madre", "para pizzas",
     "deshidratado", "deshidratada", "sin gas", "con gas", "mineralizada",
     "baja en sodio", "descafeinado", "en hebras", "molida",
+    # Farmacia: lo que describe el efecto o la presentación, no el producto.
+    # Sobre las fotos del conjunto, estas frases estaban GANANDO el campo
+    # `nombre_producto` —«RÁPIDA ACCIÓN», «RÁPIDA ACCIÓN NUEVA FÓRMULA»— porque
+    # nada las clasificaba y quedaban como el bloque legible más grande.
+    "analgesico", "antiinflamatorio", "antiacido", "antialergico",
+    "antibiotico", "antiespasmodico", "antihemorroidal", "antigripal",
+    "antitusivo", "descongestivo", "laxante", "flebotonico", "antibacterial",
+    "rapida accion", "accion rapida", "nueva formula", "venta libre",
+    "uso externo", "via oral", "recubiertos", "recubierto", "efervescente",
+    "forte", "duo", "plus", "extra fuerte",
 )
 
 # Líneas que no son ningún campo: texto legal, de trazabilidad o de servicio.
@@ -78,9 +119,12 @@ NOISE_TOKENS = (
 CONTENT = re.compile(
     r"\b\d+(?:[.,]\d+)?\s*"
     r"(?:kg|kgs|g|gr|grs|mg|ml|cc|lts?|l|litros?|unidades?|un|u|sobres?|rollos?|"
-    r"cap(?:sulas)?|saquitos?)\b",
+    r"cap(?:sulas)?|saquitos?|comprimidos?|comp|ampollas?|pastillas?)\b",
     re.IGNORECASE,
 )
+"""Cantidad de producto. Las presentaciones farmacéuticas contables
+—`10 comprimidos`, `20 cápsulas`— entran acá y no en CATEGORIES: son el
+contenido del envase, igual que `500 g`, y no el nombre de lo que hay adentro."""
 
 _MOSTLY_DIGITS = re.compile(r"^[\W\d]+$")
 _DATE_LIKE = re.compile(r"\d{1,4}[/\-.]\d{1,2}")
@@ -179,7 +223,12 @@ def _split_leading_brand(text: str) -> tuple[str, str | None]:
     """
     words = text.split()
 
-    for index in range(1, len(words)):
+    # Se recorre de atrás para adelante para quedarse con el corte MÁS TARDÍO que
+    # cumple, es decir, con la cola más corta que todavía nombra la categoría.
+    # Cortando en el primero que cumple se recortaba de menos: sobre
+    # «RAPIDA ACCION Ibuprofeno 400 mg» el primer corte válido deja
+    # «ACCION Ibuprofeno 400 mg», con la mitad del descriptor pegada al nombre.
+    for index in range(len(words) - 1, 0, -1):
         head, tail = " ".join(words[:index]), " ".join(words[index:])
         if _has_category(tail) and not _has_category(head):
             return tail, head if _is_readable(head) else None
