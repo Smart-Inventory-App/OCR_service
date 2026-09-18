@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev-prototipe]
+    branches: [main, production, development]
   pull_request:
-    branches: [main]
+    branches: [main, production, development]
 
 jobs:
   test:
@@ -20,43 +20,14 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      # La única dependencia de SISTEMA que tiene este servicio, y hace falta de
-      # verdad: `pyzbar` es un envoltorio sobre `libzbar`, así que sin la
-      # librería el paquete importa y revienta al buscar el `.so`. Es el mismo
-      # motivo por el que el `Dockerfile` la instala — el decodificador de
-      # códigos de barras corre acá, no en los servicios de motor —, y sin este
-      # paso fallan las ~40 pruebas que decodifican de verdad (las de dominio
-      # GS1, que son aritmética pura, pasan igual y esconden el problema).
-      #
-      # El nombre del paquete cambió en Ubuntu 24.04 por la transición de
-      # `time_t`: `libzbar0t64` allá, `libzbar0` en las anteriores. Se intentan
-      # los dos para no atarse a la versión del runner.
       - name: Install libzbar
         run: |
           sudo apt-get update
           sudo apt-get install -y libzbar0t64 || sudo apt-get install -y libzbar0
 
-      # Las dependencias de Python, en cambio, son todas livianas: este servicio
-      # coordina, parsea y puntúa, pero no ejecuta ningún motor. Ni OpenCV, ni
-      # pytesseract, ni PyTorch. Los motores se doblan con `respx` y Redis con
-      # `fakeredis`.
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # `bench/` e `integration_tests/` quedan deliberadamente afuera, y por el
-      # mismo motivo: los dos necesitan los tres servicios de motor levantados.
-      #
-      #   `bench/`              mide precisión sobre el conjunto de fotos y tarda
-      #                         ~10 minutos. Es una herramienta de medición, no de
-      #                         regresión.
-      #   `integration_tests/`  verifica el contrato con los motores de verdad —
-      #                         que la `Transform` viaje y se aplique, que cada
-      #                         motor declare sus capacidades, que las lecturas
-      #                         grabadas sigan representando al módulo. Se corre a
-      #                         mano con `pytest -c pytest-integration.ini`.
-      #
-      # Que estén fuera de `tests/` es lo que hace que este paso no tenga que
-      # excluirlos: `pytest tests/` no los ve. No agregar `pytest` a secas acá.
       - name: Run tests with coverage
         run: |
           pytest tests/ \
