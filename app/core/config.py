@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # JWT — mismo secret que el servicio Auth
-    JWT_SECRET: str = "change-this-secret-in-production"
+    JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
 
     # Servicios del monorepo
