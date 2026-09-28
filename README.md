@@ -1,4 +1,6 @@
-# Servicio de OCR — Smart Inventory
+# Servicio de OCR — Smart Inventory Platform
+
+[![codecov](https://codecov.io/gh/Smart-Inventory-App/OCR_service/branch/main/graph/badge.svg?token=PIPLT38IER)](https://codecov.io/gh/Smart-Inventory-App/OCR_service)
 
 **Coordinador** del módulo de **Reconocimiento Óptico de Caracteres**. Lee etiquetas de producto, sellos de vencimiento y comprobantes, y devuelve los campos estructurados que el Core necesita para dar de alta inventario automáticamente, con una **confianza por campo** que indica cuándo hace falta que el usuario confirme el dato.
 
