@@ -1,0 +1,19 @@
+coverage:
+  precision: 2
+  round: down
+  status:
+    project:
+      default:
+        target: 90%
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "header, diff, files"
+  require_changes: true
+
+ignore:
+  - "tests/**"
+  - "integration_tests/**"
+  - "bench/**"

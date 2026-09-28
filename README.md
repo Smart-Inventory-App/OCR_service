@@ -348,7 +348,7 @@ Procesamiento **asincrónico** para evitar bloqueos en la experiencia de usuario
 App (React Native)
    │  1) POST /ocr/scan  (la foto, multipart)
    ▼
-ocr_service ──2) POST /storage/temp──► image_storage_service ──► Cloudinary (bazaar/ocr-temp)
+ocr_service ──2) POST /storage/temp──► image_storage_service ──► Cloudinary (tpp/ocr-temp)
    │           ◄── { url, expires_at } ──┘
    │  3) encola el job en Redis y responde 202 { job_id }
    ▼
@@ -363,7 +363,7 @@ app_backend  persiste el inventario en PostgreSQL
 backoffice_backend  valida/monitorea los datos OCR cargados
 ```
 
-**La imagen es efímera.** Sólo existe en `bazaar/ocr-temp` mientras el OCR trabaja; el worker la descarta al terminar, haya salido bien o mal. Si el worker se cae, el TTL del storage la purga.
+**La imagen es efímera.** Sólo existe en `tpp/ocr-temp` mientras el OCR trabaja; el worker la descarta al terminar, haya salido bien o mal. Si el worker se cae, el TTL del storage la purga.
 
 ### Puertos
 
@@ -425,7 +425,7 @@ Para cuando el Core ya tiene la URL de Cloudinary.
 
 ```jsonc
 {
-  "image_url": "https://res.cloudinary.com/.../bazaar/ocr-temp/abc.jpg",
+  "image_url": "https://res.cloudinary.com/.../tpp/ocr-temp/abc.jpg",
   "doc_type": "expiry_date",     // "product_label" | "expiry_date" | "receipt"
   "lang": "spa",                 // opcional
   "engine": "hybrid",            // opcional
@@ -498,7 +498,7 @@ Público. Lo usa el banco de pruebas para no ofrecer un motor apagado.
 
 ### `POST /ocr/maintenance/purge-temp` — Limpieza de Temporales
 
-Borra las imágenes de `bazaar/ocr-temp` que vencieron sin que nadie las descartara. El worker descarta la suya en un `finally`, así que el caso normal ya está cubierto: esto es para cuando el proceso muere en medio de un job (un OOM, un redeploy). Vive acá y no en quien lo llama porque el storage es dependencia de este servicio.
+Borra las imágenes de `tpp/ocr-temp` que vencieron sin que nadie las descartara. El worker descarta la suya en un `finally`, así que el caso normal ya está cubierto: esto es para cuando el proceso muere en medio de un job (un OOM, un redeploy). Vive acá y no en quien lo llama porque el storage es dependencia de este servicio.
 
 **Respuesta:** `{ "purged": 3 }`. Lo expone el backoffice como `POST /admin/ocr/temp/purge`.
 

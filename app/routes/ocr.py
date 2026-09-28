@@ -117,7 +117,7 @@ async def scan(
 ):
     """Punto de entrada de la App: sube la foto como temporal y encola el job.
 
-    La imagen vive en `bazaar/ocr-temp` sólo mientras se la procesa: el worker la
+    La imagen vive en `tpp/ocr-temp` sólo mientras se la procesa: el worker la
     descarta al terminar (`discard_after=True`).
     """
     engine = _validate_engine(engine)
