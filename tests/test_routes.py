@@ -14,7 +14,7 @@ from tests.conftest import barcode_photo, render_image
 LABEL_LINES = ["La Serenisima", "LECHE ENTERA", "1 litro"]
 LABEL_HEIGHTS = [60, 30, 16]
 STAMP_LINES = ["VTO: 15/08/2027"]
-IMAGE_URL = "https://res.cloudinary.com/demo/image/upload/bazaar/ocr-temp/scan.jpg"
+IMAGE_URL = "https://res.cloudinary.com/demo/image/upload/tpp/ocr-temp/scan.jpg"
 
 
 def _image_bytes() -> bytes:

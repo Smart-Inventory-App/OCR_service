@@ -14,7 +14,7 @@ from app.schemas.ocr import DocType
 from app.services import image_loader, storage_client
 from tests.conftest import render_image
 
-IMAGE_URL = "https://res.cloudinary.com/demo/image/upload/bazaar/ocr-temp/scan.jpg"
+IMAGE_URL = "https://res.cloudinary.com/demo/image/upload/tpp/ocr-temp/scan.jpg"
 
 
 def _transport(handler) -> httpx.MockTransport:
