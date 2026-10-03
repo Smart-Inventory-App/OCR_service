@@ -67,9 +67,20 @@ def validate(content: bytes) -> tuple[int, int]:
     try:
         with Image.open(io.BytesIO(content)) as image:
             size = image.size
+            image_format = image.format
 
         with Image.open(io.BytesIO(content)) as image:
             image.verify()
+
+        if image_format == "JPEG":
+            # `verify()` no mira los datos de un JPEG, así que uno cortado a la
+            # mitad pasaba, se subía al storage, esperaba su turno en la cola y
+            # recién el motor lo rechazaba. Decodificarlo en modo `draft` recorre
+            # el archivo a una fracción del tamaño —sin pagar la imagen completa 
+            # en memoria— y falla enseguida si faltan bytes.
+            with Image.open(io.BytesIO(content)) as image:
+                image.draft("L", (64, 64))
+                image.load()
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
         raise ImageLoadError("El archivo no es una imagen válida") from exc
 

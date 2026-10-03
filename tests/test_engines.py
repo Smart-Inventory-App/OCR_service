@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.engines import factory
 from app.engines.base import OCREngine, OCRWord, RawOCROutput
 from app.engines.factory import HybridEngine
-from app.engines.remote import EngineUnavailable, RemoteEngine
+from app.engines.remote import EngineUnavailable, RemoteEngine, strip_foreign_script
 from app.pipeline.transform import Transform
 from tests.conftest import FakeEngine, make_output
 
@@ -115,6 +115,41 @@ def test_remote_engine_maps_words_and_confidence():
     assert output.words[0].text == "LECHE"
     assert output.words[0].confidence == pytest.approx(0.93)
     assert output.elapsed_ms == 120
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("CAFÉ 行", "CAFÉ"),
+    ("SIN GLUTEN 福", "SIN GLUTEN"),
+    ("福", ""),
+    ("ひらがな カタカナ", ""),
+    ("한국어", ""),
+    ("Yogur Ñandú 950 g", "Yogur Ñandú 950 g"),
+    ("Leche 3% · 1 L", "Leche 3% · 1 L"),
+])
+def test_strip_foreign_script_keeps_spanish_and_drops_ideograms(text, expected):
+    """El modelo multilingüe de PaddleOCR devuelve ideogramas cuando mira un logo o una trama."""
+    assert strip_foreign_script(text) == expected
+
+
+@respx.mock
+def test_remote_engine_drops_ideograms_from_the_words_and_the_text():
+    body = engine_response([WORD, {**WORD, "text": "行", "left": 200}, {**WORD, "text": "TOSTADO 福", "left": 300}])
+    body["text"] = "LECHE\n行\nTOSTADO 福"
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(return_value=httpx.Response(200, json=body))
+
+    output = remote().run(IMAGE)
+
+    assert [w.text for w in output.words] == ["LECHE", "TOSTADO"]
+    assert output.text == "LECHE\n\nTOSTADO "
+
+
+@respx.mock
+def test_remote_engine_rebuilds_the_text_when_it_was_only_ideograms():
+    body = engine_response([WORD])
+    body["text"] = "行福"
+    respx.post(f"{TESSERACT_URL}/engine/run").mock(return_value=httpx.Response(200, json=body))
+
+    assert remote().run(IMAGE).text == "LECHE"
 
 
 @respx.mock
