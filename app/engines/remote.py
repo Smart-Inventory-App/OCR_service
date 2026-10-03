@@ -16,6 +16,7 @@ intentos) sigue estando de este lado. El servicio remoto sólo ejecuta.
 import itertools
 import json
 import logging
+import re
 
 import httpx
 
@@ -195,24 +196,42 @@ class RemoteEngine:
         return {_API_KEY_HEADER: settings.ENGINE_API_KEY} if settings.ENGINE_API_KEY else {}
 
 
+# Escrituras que este servicio no lee: ideogramas chinos y japoneses, silabario
+# coreano y sus signos. El idioma de trabajo es español.
+_FOREIGN_SCRIPT = re.compile(
+    "[\u1100-\u11ff\u2e80-\u2fdf\u3000-\u30ff\u3100-\u318f\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]"
+)
+
+
+def strip_foreign_script(text: str) -> str:
+    """El texto sin caracteres de escrituras que no se leen."""
+    return _FOREIGN_SCRIPT.sub("", text).strip()
+
+
 def _to_output(body: dict, fallback_name: str) -> RawOCROutput:
-    words = [
-        OCRWord(
-            text=word["text"],
-            confidence=float(word.get("confidence", 0.0)),
-            left=int(word.get("left", 0)),
-            top=int(word.get("top", 0)),
-            width=int(word.get("width", 0)),
-            height=int(word.get("height", 0)),
-            line_num=int(word.get("line_num", 0)),
+    words = []
+    for word in body.get("words", []):
+        text = strip_foreign_script(word["text"])
+        if not text:
+            continue
+        words.append(
+            OCRWord(
+                text=text,
+                confidence=float(word.get("confidence", 0.0)),
+                left=int(word.get("left", 0)),
+                top=int(word.get("top", 0)),
+                width=int(word.get("width", 0)),
+                height=int(word.get("height", 0)),
+                line_num=int(word.get("line_num", 0)),
+            )
         )
-        for word in body.get("words", [])
-    ]
+
+    raw_text = _FOREIGN_SCRIPT.sub("", body.get("text") or "")
 
     return RawOCROutput(
         # El texto lo arma el motor a partir de sus propias líneas; si no vino,
         # se reconstruye acá con la misma regla.
-        text=body.get("text") or RawOCROutput.from_words(words, fallback_name).text,
+        text=raw_text if raw_text.strip() else RawOCROutput.from_words(words, fallback_name).text,
         words=words,
         engine=body.get("engine") or fallback_name,
         elapsed_ms=int(body.get("elapsed_ms", 0)),
