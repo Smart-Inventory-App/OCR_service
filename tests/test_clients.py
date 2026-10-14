@@ -84,6 +84,38 @@ def test_validate_rejects_non_image_bytes():
         image_loader.validate(b"esto no es una imagen")
 
 
+def _png(size=(320, 240)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color=(240, 240, 240)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("fraction", [0.3, 0.5, 0.9, 0.99])
+def test_validate_rejects_a_truncated_jpeg(fraction):
+    """`verify()` no mira los datos de un JPEG: uno cortado pasaba, se subía al storage, esperaba en
+    la cola y recién el motor lo rechazaba con un error técnico."""
+    photo = render_image([("LECHE ENTERA", 40), ("1 litro", 30)], size=(900, 600))
+
+    with pytest.raises(image_loader.ImageLoadError, match="no es una imagen"):
+        image_loader.validate(photo[: int(len(photo) * fraction)])
+
+
+def test_validate_rejects_a_truncated_png():
+    png = _png()
+
+    with pytest.raises(image_loader.ImageLoadError, match="no es una imagen"):
+        image_loader.validate(png[: len(png) // 2])
+
+
+def test_validate_accepts_a_complete_png_and_jpeg():
+    assert image_loader.validate(_png((320, 240))) == (320, 240)
+    assert image_loader.validate(render_image([("PAN", 40)], size=(640, 480))) == (640, 480)
+
+
 def test_fingerprint_is_stable_and_content_dependent():
     a = render_image([("LECHE", 40)])
     b = render_image([("PAN", 40)])
